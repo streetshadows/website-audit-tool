@@ -1,0 +1,21 @@
+# Project tooling configuration for the Website Audit Toolkit.
+# This repo has no build step — it is a set of scripts — so pyproject.toml exists
+# only to pin the lint/format standard (ruff). See CONTRIBUTING.md for the workflow.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# Per-stage collectors live at the repo root; the gitignored audit output dir does not.
+extend-exclude = ["audit", "examples"]
+
+[tool.ruff.lint]
+# Base ruff set (E/F/W) plus import sorting (I) and a few correctness/upgrade rules.
+extend-select = ["I", "W", "UP", "B"]
+# Deliberate style allowance: these single-purpose CLI collectors use compact paired
+# statements and guard clauses (`if x: return`, `a; b`) consistently throughout. That
+# is an intentional, internally consistent convention — not accidental — so the two
+# "multiple statements on one line" rules are disabled. Everything else is enforced.
+ignore = ["E701", "E702"]
+
+[tool.ruff.format]
+quote-style = "double"

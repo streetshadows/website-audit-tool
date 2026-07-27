@@ -1,0 +1,25 @@
+name: Semgrep
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install Semgrep
+        run: pip install semgrep
+      - name: Scan (Python + secrets; shell is covered by ShellCheck)
+        run: semgrep scan --config p/python --config p/secrets --error --metrics=off

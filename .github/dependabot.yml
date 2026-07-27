@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Runtime Python dependencies (requirements.txt). Grouped so related bumps land in
+  # one PR instead of several that conflict on the shared requirements.txt.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  # Keep the GitHub Actions used by CI up to date — also grouped into a single PR.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    groups:
+      github-actions:
+        patterns: ["*"]

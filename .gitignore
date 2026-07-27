@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Secrets — never commit API keys. Use .env (gitignored) or environment secrets.
+.env
+.env.*
+!.env.example
+
+# Default scan output directory
+/audit/
+
+# Worked example audits are kept private, not published in the public repo
+/examples/

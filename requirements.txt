@@ -1,0 +1,10 @@
+# Runtime Python dependencies for the audit collectors and the report builder.
+# Install with:  pip install -r requirements.txt  &&  playwright install chromium
+#
+# System tools (dig, jq, curl, nuclei, httpx, whatweb, lighthouse, poppler, ImageMagick,
+# aspell) are NOT pip packages — see README.md "Setup from scratch" and
+# THIRD-PARTY-TOOLS.md for the full list and their licences.
+
+playwright>=1.60.0
+shot-scraper>=1.9.1
+Pillow>=12.2.0

@@ -92,3 +92,13 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
   `URLSCAN_API_KEY` as an environment secret in the environment config (not a file).
 - **Local CLI:** ensure the prerequisites in `README.md` are installed; `run-audit.sh`
   self-tests in preflight and aborts if a core tool is missing.
+
+## Ops portal status file (`ops/status.json`)
+
+The MakeMagic ops portal (`streetshadows/cooldeals`, `apps/ops-portal`) shows this repo on its own page by
+mirroring `ops/status.json` every 2 hours (`.github/workflows/ops-status-mirror.yml` there, read-only PAT).
+Shape: `schemaVersion`, `app`, `description`, `lastUpdated`, `session`, `sprint{name,focus}`, `tasks[]`
+(AI work: `id`, `title`, `priority` Critical/High/Medium/Low, `status` pending/in_progress/blocked/done, `notes`),
+`completedTasks[]` (same + `completedDate`), `humanActions[]` (`item`, `priority`, `linkedTask`, `dueDate`, `notes`),
+`health{}`. **Update it at the end of every session that changes task state** — open a task, close one, add or
+clear a human action — before the final commit. It is the only thing the portal sees. Seeded 2026-09-22.

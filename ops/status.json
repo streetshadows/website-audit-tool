@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "app": "Website Audit Toolkit",
+  "repo": "streetshadows/website-audit-tool",
+  "description": "Public, canonical home of the 11-stage website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
+  "lastUpdated": "2026-09-22T05:30:00.000Z",
+  "session": "2026-09-22 - [implement] ops/status.json created for the MakeMagic ops portal mirror; seeded from the repo's own docs and recent history (0 open tasks, 0 human actions, 8 completed).",
+  "sprint": {
+    "name": "Public release",
+    "focus": "Released 2026-07-27. Dependabot keeps dependencies current; no feature work open."
+  },
+  "tasks": [],
+  "completedTasks": [
+    {
+      "id": "WAT-DEPS-0922",
+      "title": "Dependabot: python-deps group + github-actions group bumps merged (PRs #3, #4)",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-09-22",
+      "notes": ""
+    },
+    {
+      "id": "WAT-RELEASE",
+      "title": "Initial public release",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-07-27",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0724",
+      "title": "Public-release readiness: community-health contacts, redacted client references, cleaned git history",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-07-24",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0617-DNSSEC",
+      "title": "Fix DNSSEC detection (authoritative from DNSKEY/DS, not the resolver AD flag)",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-06-17",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0617-OPEN",
+      "title": "Open-repo prep: licensing, third-party terms, examples removed",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-06-17",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0617-REPORT",
+      "title": "Report feedback: drop crt.sh, malware subsection, methodology table",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-06-17",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0617-TLS",
+      "title": "TLS simplification + report pagination",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-06-17",
+      "notes": ""
+    },
+    {
+      "id": "WAT-0616",
+      "title": "Verification & hardening pass",
+      "priority": "—",
+      "status": "done",
+      "completedDate": "2026-06-16",
+      "notes": ""
+    }
+  ],
+  "humanActions": [],
+  "health": {
+    "visibility": "public",
+    "ci": "GitHub Actions; Dependabot weekly"
+  }
+}

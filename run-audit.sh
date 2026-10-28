@@ -349,7 +349,8 @@ if have shot-scraper; then
     # env -u *_PROXY: shot-scraper's Chromium mis-handles the TLS-intercepting egress proxy and
     # RSTs HTTPS. Open outbound is required (see header); --ignore-certificate-errors covers the
     # transparent interception. The Python collectors clear the same vars internally.
-    env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+    # PLAYWRIGHT_BROWSERS_PATH: use the browser set preflight resolved, not Playwright's default cache.
+    env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
       shot-scraper "$TARGET" -w "$w" -o "$OUT/shot-$w.png" \
       --browser-arg --ignore-certificate-errors --reduced-motion -j "$REVEAL_JS" --wait 1800 \
       && { echo "shot-$w.png ok"; ok5=$((ok5+1)); }

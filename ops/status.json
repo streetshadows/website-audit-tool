@@ -4,7 +4,7 @@
   "repo": "streetshadows/website-audit-tool",
   "description": "Public, canonical home of the 11-stage website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
   "lastUpdated": "2026-09-22T05:30:00.000Z",
-  "session": "2026-09-22 - [implement] ops/status.json created for the MakeMagic ops portal mirror; seeded from the repo's own docs and recent history (0 open tasks, 0 human actions, 8 completed).",
+  "session": "2026-09-22 - [implement] ops/status.json created for the external status mirror; seeded from the repo's own docs and recent history (0 open tasks, 0 human actions, 8 completed).",
   "sprint": {
     "name": "Public release",
     "focus": "Released 2026-07-27. Dependabot keeps dependencies current; no feature work open."

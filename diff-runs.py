@@ -38,10 +38,13 @@ def tload(path):
 def metrics(run_dir):
     """A flat {metric: value} snapshot of one run directory. Missing artifacts are skipped."""
     m = {}
+    # Per-run bookkeeping rows aren't site facts and the current run's last rows (the diff
+    # itself, run-end) are written only on exit, so comparing them would be spurious noise.
+    skip_stages = {"run-identity", "run-end", "11-diff"}
     status = jload(os.path.join(run_dir, "0-run-status.json")) or []
-    for s in status:
-        if isinstance(s, dict) and s.get("stage"):
-            m[f"stage:{s['stage']}"] = s.get("status")
+    for st in status:
+        if isinstance(st, dict) and st.get("stage") and st["stage"] not in skip_stages:
+            m[f"stage:{st['stage']}"] = st.get("status")
 
     tls = tload(os.path.join(run_dir, "2-tls-ssllabs.txt"))
     grades = re.findall(r"\bgrade\s+([A-F][+-]?)", tls)

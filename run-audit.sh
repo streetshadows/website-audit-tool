@@ -512,6 +512,9 @@ if have python3; then
 else rec "10-perf" skipped "python3 not installed"; fi
 
 # ---------- 11. Run-to-run diff (audit as regression: only what changed since last run) ----------
+# Flush the status collected so far to disk: it is otherwise only written on EXIT, and the diff
+# compares this run's 0-run-status.json against previous-run/. (11-diff/run-end land on EXIT.)
+write_status
 if have python3; then
   if python3 "$HERE/diff-runs.py" "$OUT"; then
     rec "11-diff" ok "$(jq -r 'if .has_baseline then "\(.changed|length) changed, \(.added|length) new, \(.removed|length) gone" else "no baseline (first run)" end' "$OUT/11-diff.json" 2>/dev/null)"

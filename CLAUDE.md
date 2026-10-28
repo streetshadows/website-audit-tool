@@ -14,7 +14,8 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 ## The two halves of the job
 
 1. **Collection (deterministic, the script does it).** `./run-audit.sh https://site`
-   runs 11 stages and writes machine-readable artifacts to `./audit/`. You do not
+   runs the collection stages and writes machine-readable artifacts to `$OUT_DIR`
+   (default `./audit/`). You do not
    hand-edit these.
 2. **Reporting (judgement, you do it).** You read the artifacts + screenshots,
    annotate the evidence, and compose a per-site `build_report.py` that imports the
@@ -82,8 +83,9 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 
 | Path | Purpose |
 |---|---|
-| `run-audit.sh` | Orchestrates the 11 collection stages → `./audit/` |
-| `crawl.py` `seo-check.py` `a11y-check.py` `perf-check.py` `qa-*.py` `capture-local.py` | Per-stage collectors |
+| `run-audit.sh` | Orchestrates the collection stages → `$OUT_DIR` (default `./audit/`) |
+| `crawl.py` `seo-check.py` `a11y-check.py` `perf-check.py` `qa-*.py` `capture-local.py` `overfetch-check.py` `diff-runs.py` | Per-stage collectors |
+| `netutil.py` | Shared request policy: `AUDIT_UA`, per-host pacing, link checking |
 | `report_lib.py` | Shared report components + CSS (single source of truth for look) |
 | `REPORT-TEMPLATE.md` | The formatting contract the report MUST follow |
 | `standards.py` | Citations KB — every finding maps to a standard + governance framework |

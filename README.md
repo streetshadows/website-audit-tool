@@ -5,7 +5,7 @@
 > repo (which no longer carries this code) and re-initialised with a clean history
 > for public release. Develop here.
 
-A repeatable, scalable website-audit pipeline. One command runs 11 stages —
+A repeatable, scalable website-audit pipeline. One command runs the collection stages —
 security, TLS, SEO/indexability, accessibility, performance, and responsive/visual
 UI — and writes machine-readable artifacts. An AI assistant (Claude Code) then turns
 those artifacts into a **client-ready PDF report**. Designed to be **reliable over
@@ -104,6 +104,9 @@ agree them with the site owner, and they are recorded in `0-run-status.json`
 | `HOST_STAGES` | `1` | `0` skips DNS/RDAP/httpx, SSL Labs, nuclei and whatweb on a repeat pass over the same host (recorded as skipped). |
 | `SHOT_WIDTHS` | `390 768 1280 1440` | Stage 5 screenshot widths. |
 | `DNS_DOH` / `DOH_URL` | `1` / Cloudflare | DNS-over-HTTPS fallback when the local resolver can't be used (labelled "via DoH"). `0` disables it. |
+| `OVERFETCH` / `OVERFETCH_MAX_PAGES` | `1` / `10` | Passive logged-out over-fetch check (stage 4b): records the JSON a logged-out visitor receives and flags fields delivered but not rendered. No values stored. `0` disables. |
+| `PROTECTED_URLS` | — | Extra routes to load logged-out in stage 4b (redirect + any data requests). A "zero" only counts if the public control pages produced data requests. |
+| `BAAS_AUTH_SETTINGS` | `0` | `1` reads a detected Supabase project's **public** `/auth/v1/settings` (config flags only — signup open, auto-confirm, providers). Off by default. |
 | `OUT_DIR` | `./audit` | Output directory (see below). |
 
 Read `audit/0-run-status.json` first — it records every stage as `ok / failed /

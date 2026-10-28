@@ -27,6 +27,7 @@ the caps are part of the audit design: they bound the load placed on a third-par
 | 2 | TLS (proxy-safe) | SSL Labs, urlscan | host | `2-tls-*.{json,txt}` |
 | 3 | Headers / misconfig / tech | `curl`,`nuclei`,`whatweb` | host | `3-headers.txt`, `3-nuclei.txt`, `3-whatweb.txt` |
 | 4 | Reputation / external render | urlscan.io | host | `4-urlscan*.{json,txt,png}` |
+| 4b| Anonymous over-fetch (passive, logged-out; opt-in Supabase settings) | `overfetch-check.py` | public pages (+ `PROTECTED_URLS`) | `4b-overfetch.{json,txt}` |
 | 5 | Responsive screenshots | `shot-scraper` | homepage | `shot-*.png` |
 | 6 | Deep UI / image / spelling QA | `qa-check.py` | homepage (template/asset deep dive) | `6-qa.{json,txt}`, `qa-issue-*.png` |
 | 6b| Deep QA on extra pages | `qa-check.py` (loop) | up to `QA_DEEP_PAGES` | `deep/<slug>/6-qa.*` |
@@ -34,6 +35,7 @@ the caps are part of the audit design: they bound the load placed on a third-par
 | 8 | Multi-page responsive regression | `qa-site.py` | **all pages (capped)** | `7-qa-site.{json,txt}`, `qa-pages/*.png` |
 | 9 | Accessibility (WCAG) | `a11y-check.py` | pages (capped) | `8-a11y.{json,txt}` |
 | 10| Performance / Lighthouse | `perf-check.py` | pages (capped) | `9-perf.{json,txt}` |
+| 11| Run-to-run diff (regression) | `diff-runs.py` | this run vs `previous-run/` | `11-diff.{json,txt}` |
 
 ## What each stage checks
 

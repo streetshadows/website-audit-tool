@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-10-28 — Passive API-exposure checks, report flow, regression diff
+
+- **Anonymous over-fetch check (stage 4b).** Records the JSON a logged-out visitor's own
+  browser already receives on the public pages and flags fields delivered but never
+  rendered (OWASP API3:2023). Read-only: no auth, no crafted requests, and only response
+  shape is stored (field names, counts, rendered y/n) — never values. A protected-route
+  result is marked inconclusive unless the public control pages produced data requests.
+  `OVERFETCH=0` disables it; `PROTECTED_URLS` adds logged-out checks of protected routes.
+- **Supabase public auth settings (opt-in).** With `BAAS_AUTH_SETTINGS=1`, reads a detected
+  project's public `/auth/v1/settings` and reports config flags only (signup open,
+  auto-confirm, providers) as conditions to verify. CAPTCHA enforcement is not inferred.
+- **Wildcard CORS note.** The headers stage flags `access-control-allow-origin: *`
+  (informational; matters on API routes returning per-user data).
+- **Report.** `report_lib.document(flow=True)` gives short reports and addenda continuous
+  flow instead of one page per section. REPORT-TEMPLATE adds chain-ranking and
+  plan/tier-limit authoring rules.
+- **Run-to-run diff (stage 11).** `diff-runs.py` compares key metrics against
+  `previous-run/` and reports only what changed, so a re-audit after a fix is a short diff.
+
 ## 2026-10-28 — Request conduct and SPA accuracy
 
 - **Paced, capped, deduplicated requests.** New `netutil.py`: one identifying user-agent

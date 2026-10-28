@@ -2,44 +2,47 @@
   "schemaVersion": 1,
   "app": "Website Audit Toolkit",
   "repo": "streetshadows/website-audit-tool",
-  "description": "Public, canonical home of the 11-stage website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
-  "lastUpdated": "2026-10-28T23:00:00.000Z",
-  "session": "2026-10-28 - [implement] P1 field-feedback work: request pacing/UA/link-check policy, target-first ordering + SEED_URLS, soft-404 detection, SPA rendered-DOM fallback, scroller exemption, HOST_STAGES/SHOT_WIDTHS, DoH fallback. P2 queued.",
+  "description": "Public, canonical home of the website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
+  "lastUpdated": "2026-10-28T23:59:00.000Z",
+  "session": "2026-10-28 - [implement] P2: passive anonymous over-fetch check (stage 4b, shape only), opt-in Supabase public auth-settings read, wildcard-CORS header note, report continuous-flow mode + chain/plan-limit authoring rules, run-to-run diff (stage 11). P0/P1/P2 complete.",
   "sprint": {
     "name": "Field-feedback hardening",
-    "focus": "P0 and P1 done. Next: new passive checks and report improvements (P2)."
+    "focus": "P0, P1 and P2 complete on branch ccr-a71fd783-kyvi7z. Owner decisions outstanding: git-history cleanup; authenticated write/CAPTCHA/edge-function probes (recommended as an owner-side guide, not automated)."
   },
-  "tasks": [
+  "tasks": [],
+  "completedTasks": [
     {
       "id": "WAT-P2-OVERFETCH",
       "title": "Anonymous API over-fetch stage (schema only, never values; mandatory public-page control)",
       "priority": "Medium",
-      "status": "pending",
-      "notes": ""
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
     },
     {
       "id": "WAT-P2-AUTHCFG",
       "title": "Opt-in BaaS auth-settings read when detected; ACAO wildcard info check in headers stage",
       "priority": "Low",
-      "status": "pending",
-      "notes": ""
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
     },
     {
       "id": "WAT-P2-REPORT",
       "title": "Report: chain ranking, plan-dependency rule, addendum flow mode (report_lib + REPORT-TEMPLATE together), standards entries",
       "priority": "Medium",
-      "status": "pending",
-      "notes": ""
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
     },
     {
       "id": "WAT-P2-DIFF",
       "title": "Run-to-run diff of key metrics against previous-run/",
       "priority": "Low",
-      "status": "pending",
-      "notes": ""
-    }
-  ],
-  "completedTasks": [
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
+    },
     {
       "id": "WAT-P1-LINKS",
       "title": "Throttle, dedupe and cap link checks (HEAD with GET fallback, honour DELAY, QA_MAX_LINKS); one configurable AUDIT_UA",

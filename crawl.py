@@ -26,6 +26,7 @@ import gzip
 import json
 import os
 import re
+import secrets
 import sys
 import urllib.request
 from collections import deque
@@ -67,6 +68,16 @@ def get(url, timeout=20):
             except Exception:
                 pass
         return r.status, data.decode("utf-8", "replace")
+
+
+def fetch_or_none(url, timeout=15):
+    """(status, body) without raising: HTTP errors give (code, ""), network errors (None, "")."""
+    try:
+        return get(url, timeout)
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except Exception:
+        return None, ""
 
 
 def status_only(url, timeout=15):
@@ -241,8 +252,21 @@ def main():
         [v for k, v in groups.items() if k == "*" for rk, v in v if rk == "disallow"] if robots_present else []
     )
 
-    # well-known hygiene files
+    # soft-404 probe: a host that answers 200 for a path that cannot exist (typical of SPA
+    # hosting with an index.html fallback) makes every presence check and internal broken-link
+    # check on it meaningless, so detect it first and qualify those results.
     scheme = urlparse(base).scheme
+    probe_url = f"{scheme}://{base_host}/{secrets.token_hex(8)}-audit-404-probe"
+    probe_st, probe_body = fetch_or_none(probe_url)
+    soft404 = probe_st is not None and probe_st < 400
+    disc["soft_404"] = {"probe_url": probe_url, "status": probe_st, "soft_404": soft404}
+
+    def is_fallback(body):
+        """True when a 'present' well-known file is really the soft-404 fallback page."""
+        head = body.lstrip()[:300].lower()
+        return body.strip() == probe_body.strip() or ("<html" in head or "<!doctype html" in head)
+
+    # well-known hygiene files (on a soft-404 host, a 200 that is the HTML fallback is "soft-404")
     wk = {}
     for f in [
         "sitemap.xml",
@@ -254,7 +278,8 @@ def main():
         "humans.txt",
         "favicon.ico",
     ]:
-        wk[f] = status_only(f"{scheme}://{base_host}/{f}")
+        st, body = fetch_or_none(f"{scheme}://{base_host}/{f}")
+        wk[f] = "soft-404" if soft404 and st is not None and st < 400 and is_fallback(body) else st
     disc["well_known"] = wk
 
     # discover URLs
@@ -266,7 +291,8 @@ def main():
     if mode in ("auto", "sitemap"):
         seen = set()
         for sm in sm_candidates:
-            if status_only(sm) and status_only(sm) < 400:
+            st = status_only(sm)
+            if st and st < 400:
                 collect_sitemap(sm, seen, urls, cap)
         if len(urls) > 1 + len(seeds):  # seeds alone don't make the sitemap a success
             used = "sitemap"
@@ -283,6 +309,8 @@ def main():
     json.dump(disc, open(os.path.join(out, "discovery.json"), "w"), indent=2)
 
     print(f"discovery: method={used} pages={len(urls)} (cap {cap}); seeds={len(seeds)}")
+    if soft404:
+        print(f"SOFT 404: {probe_url} answered {probe_st} — unknown paths are not reported as missing")
     if seeds_ignored:
         print(f"SEED_URLS ignored (off-site or not http/https): {seeds_ignored}")
     print(

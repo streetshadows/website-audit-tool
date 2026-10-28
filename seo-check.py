@@ -212,6 +212,10 @@ def main():
     cap = int(os.environ.get("SEO_MAX_PAGES", 300))
     urls = urls[:cap]
     dis = robots_disallows(out)
+    try:
+        soft404 = json.load(open(os.path.join(out, "crawl", "discovery.json"))).get("soft_404") or {}
+    except Exception:
+        soft404 = {}
     pages, all_links = {}, set()
     for u in urls:
         try:
@@ -255,6 +259,7 @@ def main():
         "duplicate_titles": dup_titles,
         "duplicate_descriptions": dup_descs,
         "broken_links": broken,
+        "soft_404": soft404,
         "links_found": len(all_links),
         "links_not_checked_cap": links_not_checked,
         "pages": pages,
@@ -295,6 +300,8 @@ def main():
         fired.append("seo-broken-links")
     if mixed:
         fired.append("seo-mixed-content")
+    if soft404.get("soft_404"):
+        fired.append("seo-soft-404")
     if not_indexable:
         fired.append("seo-indexability")
     report["standards"] = standards.applied(fired)
@@ -321,6 +328,11 @@ def main():
     L.append(f"duplicate titles: {len(dup_titles)}; duplicate descriptions: {len(dup_descs)}")
     real_broken = {u: d for u, d in broken.items() if not d["likely_bot_block"]}
     L.append(f"broken links: {len(real_broken)} (+{len(broken) - len(real_broken)} likely bot-blocked)")
+    if soft404.get("soft_404"):
+        L.append(
+            f"    [!] SOFT 404: unknown path answered {soft404.get('status')} — internal broken links on this "
+            "host CANNOT be detected (they return 200); 'broken links: 0' is not a pass here"
+        )
     if links_not_checked:
         L.append(
             f"    [!] {len(links_not_checked)} of {len(all_links)} link(s) NOT checked (QA_MAX_LINKS cap) — "

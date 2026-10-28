@@ -187,6 +187,18 @@ STANDARDS = {
         "link equity. Fix or remove broken links; 301 moved targets.",
         "why_pass": "Internal/external links resolve, preserving crawl budget, UX and link equity.",
     },
+    "seo-soft-404": {
+        "title": "Unknown URLs return 200 (soft 404)",
+        "standard": "RFC 9110 §15.5.5 404 Not Found + Google Search Central — soft 404 errors",
+        "url": "https://developers.google.com/search/docs/crawling-indexing/http-network-errors#soft-404-errors",
+        "frameworks": {"RFC 9110": "§15.5.5 (404 Not Found)", "Google Search Essentials": "Soft 404"},
+        "why_fail": "A path that cannot exist answered with a success status, so every mistyped or "
+        "removed URL looks like a real page: search engines report soft 404s and may index junk "
+        "URLs, monitoring and link checkers cannot see broken internal links, and scanners "
+        "misreport missing files as present. Return a real 404 for unknown routes (for an SPA, "
+        "a host-level 404 rule or a server-side route list).",
+        "why_pass": "Unknown paths return 404, so missing pages are visible to crawlers, users and monitoring.",
+    },
     "seo-mixed-content": {
         "title": "Mixed content (http on https)",
         "standard": "W3C Mixed Content + Google HTTPS-as-ranking-signal",

@@ -16,6 +16,10 @@ Outputs: <out>/crawl/urls.txt, <out>/crawl/discovery.json, <out>/crawl/robots.tx
 
 Usage: crawl.py <base_url> <out_dir>
 Env: MAX_PAGES(150) MAX_DEPTH(4) DELAY(0.4) MODE(auto|sitemap|links) INCLUDE_SUBDOMAINS(0)
+     SEED_URLS — extra pages to include, comma/space separated, absolute or site-relative.
+                 Needed for SPAs, whose client-side routes never appear as links in raw HTML.
+urls.txt order: the target first, then SEED_URLS, then everything else sorted — later stages
+(and the MAX_PAGES cap) rely on that, so the requested pages are never displaced.
 """
 
 import gzip
@@ -149,8 +153,8 @@ def collect_sitemap(url, seen, urls, cap, depth=0):
                 urls.add(n)
 
 
-def link_bfs(base, base_host, cap, max_depth, include_sub):
-    seen, pages, q = set(), set(), deque([(base, 0)])
+def link_bfs(base, base_host, cap, max_depth, include_sub, seeds=()):
+    seen, pages, q = set(), set(), deque([(base, 0)] + [(s, 0) for s in seeds])
     while q and len(pages) < cap:
         url, d = q.popleft()
         if url in seen or d > max_depth:
@@ -188,11 +192,21 @@ def main():
     max_depth = int(os.environ.get("MAX_DEPTH", 4))
     mode = os.environ.get("MODE", "auto")
     include_sub = os.environ.get("INCLUDE_SUBDOMAINS", "0") == "1"
+    seeds, seeds_ignored = [], []
+    for raw in re.split(r"[,\s]+", os.environ.get("SEED_URLS", "").strip()):
+        n = norm(urljoin(base, raw)) if raw else None
+        if n and same_site(urlparse(n).netloc, base_host, include_sub):
+            if n != base and n not in seeds:
+                seeds.append(n)
+        elif raw:
+            seeds_ignored.append(raw)  # off-site or not http(s): reported, never crawled
 
     disc = {
         "base": base,
         "host": base_host,
         "config": {"max_pages": cap, "max_depth": max_depth, "mode": mode, "delay_s": netutil.delay()},
+        "seed_urls": seeds,
+        "seed_urls_ignored": seeds_ignored,
     }
 
     # robots.txt
@@ -244,7 +258,7 @@ def main():
     disc["well_known"] = wk
 
     # discover URLs
-    urls = set([base])
+    urls = set([base, *seeds])
     sm_candidates = list(
         dict.fromkeys(sitemaps + [f"{scheme}://{base_host}/sitemap.xml", f"{scheme}://{base_host}/sitemap_index.xml"])
     )
@@ -254,12 +268,13 @@ def main():
         for sm in sm_candidates:
             if status_only(sm) and status_only(sm) < 400:
                 collect_sitemap(sm, seen, urls, cap)
-        if len(urls) > 1:
+        if len(urls) > 1 + len(seeds):  # seeds alone don't make the sitemap a success
             used = "sitemap"
     if used == "none" and mode in ("auto", "links"):
-        urls |= link_bfs(base, base_host, cap, max_depth, include_sub)
+        urls |= link_bfs(base, base_host, cap, max_depth, include_sub, seeds)
         used = "link-crawl"
-    urls = sorted(u for u in urls if same_site(urlparse(u).netloc, base_host, include_sub))[:cap]
+    rest = sorted(u for u in urls - {base, *seeds} if same_site(urlparse(u).netloc, base_host, include_sub))
+    urls = [base, *seeds, *rest][:cap]
 
     disc["discovery_method"] = used
     disc["page_count"] = len(urls)
@@ -267,7 +282,9 @@ def main():
     open(os.path.join(out, "urls.txt"), "w").write("\n".join(urls) + "\n")
     json.dump(disc, open(os.path.join(out, "discovery.json"), "w"), indent=2)
 
-    print(f"discovery: method={used} pages={len(urls)} (cap {cap})")
+    print(f"discovery: method={used} pages={len(urls)} (cap {cap}); seeds={len(seeds)}")
+    if seeds_ignored:
+        print(f"SEED_URLS ignored (off-site or not http/https): {seeds_ignored}")
     print(
         f"robots.txt: {'present' if robots_present else 'MISSING'}; "
         f"sitemap.xml: {wk['sitemap.xml']}; llms.txt: {wk['llms.txt']}; security.txt: {wk['.well-known/security.txt']}"

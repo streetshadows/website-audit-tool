@@ -370,22 +370,30 @@ if have shot-scraper; then
 else echo "shot-scraper not installed — skipping screenshots"; rec "5-screenshots" skipped "shot-scraper not installed"; fi
 
 # ---------- 6. Website QA: UI / images / spelling / responsive (deep, per page) ----------
-# Deep template/asset review. Runs on the homepage (-> $OUT, used by the report) and,
-# if QA_DEEP_PAGES>1, on the next pages from the crawl into $OUT/deep/<slug>/.
+# Deep template/asset review. Runs on the target (-> $OUT, used by the report) and on the next
+# QA_DEEP_PAGES-1 pages of crawl/urls.txt into $OUT/deep/<slug>/. urls.txt lists the target first,
+# then SEED_URLS, then the rest sorted, so requested pages are reviewed first; every seed is
+# reviewed even if QA_DEEP_PAGES is smaller. Each deep page gets its own run-status row.
 if have python3 && python3 -c 'import playwright' 2>/dev/null; then
   have aspell || echo "(aspell not installed — spelling check will be skipped: apt install aspell aspell-en)"
   if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/qa-check.py" "$TARGET" "$OUT"; then
-    rec "6-qa" ok "deep UI/image/spelling QA (homepage)"
-  else rec "6-qa" failed "qa-check.py error"; fi
+    rec "6-qa" ok "deep UI/image/spelling QA: $TARGET"
+  else rec "6-qa" failed "qa-check.py error on $TARGET"; fi
+  n_seeds=$(jq -r '.seed_urls | length' "$OUT/crawl/discovery.json" 2>/dev/null || echo 0)
   QA_DEEP_PAGES="${QA_DEEP_PAGES:-3}"
+  [ "$QA_DEEP_PAGES" -lt $((n_seeds+1)) ] && QA_DEEP_PAGES=$((n_seeds+1))
   if [ -f "$OUT/crawl/urls.txt" ] && [ "$QA_DEEP_PAGES" -gt 1 ]; then
-    tail -n +2 "$OUT/crawl/urls.txt" | head -n $((QA_DEEP_PAGES-1)) | while read -r purl; do
+    # mapfile, not `| while`: a pipe would run the loop in a subshell and lose its rec() rows.
+    mapfile -t deep_urls < <(tail -n +2 "$OUT/crawl/urls.txt" | head -n $((QA_DEEP_PAGES-1)))
+    n=0
+    for purl in "${deep_urls[@]}"; do
       [ -z "$purl" ] && continue
+      n=$((n+1))
       slug=$(echo "$purl" | sed -E 's#^https?://##; s#[^a-zA-Z0-9]+#_#g' | cut -c1-50)
       mkdir -p "$OUT/deep/$slug"
-      PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
-        python3 "$HERE/qa-check.py" "$purl" "$OUT/deep/$slug" >/dev/null 2>&1 \
-        && echo "deep QA: $purl -> deep/$slug/" || echo "deep QA failed: $purl"
+      if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/qa-check.py" "$purl" "$OUT/deep/$slug" >/dev/null 2>&1
+      then rec "6-qa-deep-$n" ok "$purl -> deep/$slug/"
+      else rec "6-qa-deep-$n" failed "qa-check.py error on $purl"; fi
     done
   fi
 else echo "python3/playwright missing — skipping QA section"; rec "6-qa" skipped "python3/playwright not available"; fi

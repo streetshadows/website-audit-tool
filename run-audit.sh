@@ -14,7 +14,7 @@ OUT="${OUT_DIR:-./audit}"; mkdir -p "$OUT"
 # So move the previous run's generated artifacts into $OUT/previous-run/ (replacing any older
 # copy). Only files this pipeline writes are moved; report-assets/ and anything else is untouched.
 rotate_previous_run(){
-  local prev="$OUT/previous-run" items
+  local prev="$OUT/previous-run" items p found=()
   shopt -s nullglob
   items=("$OUT"/0-run-status.* "$OUT"/1-dns.txt "$OUT"/1-httpx.json "$OUT"/1-rdap-*.json "$OUT"/1-whois.txt
          "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
@@ -22,8 +22,9 @@ rotate_previous_run(){
          "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
          "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep)
   shopt -u nullglob
-  [ ${#items[@]} -eq 0 ] && return 0
-  rm -rf -- "$prev" && mkdir -p "$prev" && mv -- "${items[@]}" "$prev/" \
+  for p in "${items[@]}"; do [ -e "$p" ] && found+=("$p"); done   # literal names survive nullglob
+  [ ${#found[@]} -eq 0 ] && return 0
+  rm -rf -- "$prev" && mkdir -p "$prev" && mv -- "${found[@]}" "$prev/" \
     && echo "== Previous run's artifacts moved to $prev/ =="
 }
 rotate_previous_run

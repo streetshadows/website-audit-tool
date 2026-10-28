@@ -23,6 +23,7 @@ Writes: <out>/4b-overfetch.json, <out>/4b-overfetch.txt
 import json
 import os
 import sys
+import urllib.request
 from urllib.parse import parse_qsl, urlparse
 
 from playwright.sync_api import sync_playwright
@@ -80,7 +81,46 @@ def field_shape(rows, page_text):
     return out
 
 
-def capture(browser, url, watch_ms):
+def note_supabase(request, baas):
+    """If a request goes to a Supabase project, remember its origin and the PUBLIC anon key the
+    page already ships (held in memory only, for the opt-in public-settings read; never stored)."""
+    host = urlparse(request.url).netloc
+    if not host.endswith(".supabase.co"):
+        return
+    origin = f"https://{host}"
+    if origin not in baas:
+        key = request.headers.get("apikey") or ""
+        if not key:
+            auth = request.headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                key = auth[7:]
+        baas[origin] = key
+
+
+def read_supabase_settings(origin, anon_key):
+    """GET the PUBLIC, unauthenticated /auth/v1/settings and report config flags only.
+    This is the same document the client bundle already reads; no account or secret is used.
+    CAPTCHA enforcement is not exposed here and is deliberately not inferred."""
+    req = urllib.request.Request(
+        f"{origin}/auth/v1/settings",
+        headers={"apikey": anon_key, "User-Agent": netutil.AUDIT_UA} if anon_key else {"User-Agent": netutil.AUDIT_UA},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            cfg = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as e:
+        return {"origin": origin, "error": f"{type(e).__name__}: {str(e)[:80]}"}
+    ext = cfg.get("external") or {}
+    return {
+        "origin": origin,
+        "disable_signup": cfg.get("disable_signup"),
+        "mailer_autoconfirm": cfg.get("mailer_autoconfirm"),
+        "phone_autoconfirm": cfg.get("phone_autoconfirm"),
+        "external_providers": sorted(k for k, v in ext.items() if v),
+    }
+
+
+def capture(browser, url, watch_ms, baas):
     """Load one page in a fresh anonymous context; return its data responses (shape only)."""
     payloads = []
 
@@ -100,6 +140,7 @@ def capture(browser, url, watch_ms):
     ctx = browser.new_context(ignore_https_errors=True, user_agent=netutil.AUDIT_UA)
     pg = ctx.new_page()
     pg.on("response", on_response)
+    pg.on("request", lambda req: note_supabase(req, baas))
     result = {"url": url, "final_url": url, "redirected": False, "endpoints": {}, "error": None}
     try:
         netutil.PACER.wait(url)
@@ -146,16 +187,22 @@ def main():
     protected = [u.strip() for u in os.environ.get("PROTECTED_URLS", "").replace(",", " ").split() if u.strip()]
     watch_ms = int(os.environ.get("PROTECTED_WATCH_MS", 5000))
 
-    public, prot = [], []
+    public, prot, baas = [], [], {}  # baas: {supabase_origin: anon_key} — in memory only
     with sync_playwright() as p:
         b = p.chromium.launch(
             args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
         )
         for u in public_urls:
-            public.append(capture(b, u, 2000))
+            public.append(capture(b, u, 2000, baas))
         for u in protected:
-            prot.append(capture(b, u, watch_ms))
+            prot.append(capture(b, u, watch_ms, baas))
         b.close()
+
+    # Opt-in: read each detected Supabase project's PUBLIC auth settings (config flags only).
+    auth_settings = []
+    if os.environ.get("BAAS_AUTH_SETTINGS") == "1":
+        for origin, anon_key in baas.items():
+            auth_settings.append(read_supabase_settings(origin, anon_key))
 
     # The public pages are the control: a protected route making "no data request" is only
     # meaningful if the public pages did make some (i.e. the capture mechanism actually works).
@@ -190,6 +237,8 @@ def main():
         "over_fetch": over,
         "public": public,
         "protected": prot_summary,
+        "supabase_detected": sorted(baas.keys()),
+        "supabase_auth_settings": auth_settings,
         "standards": standards.applied(["api-excessive-data"]) if over else {},
     }
     json.dump(report, open(os.path.join(out, "4b-overfetch.json"), "w"), indent=2)
@@ -216,6 +265,28 @@ def main():
             if s["inconclusive"]:
                 dq += " — INCONCLUSIVE (control produced none)"
             L.append(f"    {s['url']} -> {tag}; {dq}" + (f"; error {s['error']}" if s["error"] else ""))
+    if report["supabase_detected"]:
+        L.append(f"\nSupabase project(s) detected: {', '.join(report['supabase_detected'])}")
+        if not auth_settings:
+            L.append("  (set BAAS_AUTH_SETTINGS=1 to read each project's PUBLIC /auth/v1/settings)")
+        for a in auth_settings:
+            if a.get("error"):
+                L.append(f"  {a['origin']}: settings read failed ({a['error']})")
+                continue
+            # Report configuration as conditions to verify, not as findings on their own.
+            signup_open = a["disable_signup"] is False
+            L.append(f"  {a['origin']} (public auth settings):")
+            L.append(
+                f"    public signup: {'OPEN' if signup_open else 'closed/unknown'} (disable_signup={a['disable_signup']})"
+            )
+            L.append(f"    email auto-confirm: {a['mailer_autoconfirm']}; phone auto-confirm: {a['phone_autoconfirm']}")
+            L.append(f"    external providers enabled: {', '.join(a['external_providers']) or 'none'}")
+            if signup_open and a["mailer_autoconfirm"]:
+                L.append(
+                    "    [!] open signup + email auto-confirm: accounts are usable without proving the email. "
+                    "VERIFY no trigger links a new account to an existing profile by email. (CAPTCHA enforcement "
+                    "is NOT visible here — confirm separately.)"
+                )
     if over and report["standards"]:
         L.append("\n-- WHY / STANDARDS --")
         for code in report["standards"]:

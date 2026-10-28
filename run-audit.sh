@@ -18,7 +18,7 @@ rotate_previous_run(){
   shopt -s nullglob
   items=("$OUT"/0-run-status.* "$OUT"/1-dns.txt "$OUT"/1-httpx.json "$OUT"/1-rdap-*.json "$OUT"/1-whois.txt
          "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
-         "$OUT"/4-urlscan* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
+         "$OUT"/4-urlscan* "$OUT"/4b-overfetch.* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
          "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
          "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep "$OUT"/link-cache.json)
   shopt -u nullglob
@@ -401,6 +401,16 @@ if [ ! -s "$OUT/dom.html" ] && have python3 && python3 -c 'import playwright' 2>
     rec "4-local-capture" ok "local DOM/network/cookies captured"
   else echo "local capture failed" | tee -a "$OUT/4-local-capture.txt"; rec "4-local-capture" failed "capture-local.py error"; fi
 fi
+
+# ---------- 4b. Anonymous over-fetch (passive; logged-out response shape) ----------
+# Records the JSON a logged-out visitor's own browser already receives on the public pages and
+# compares delivered fields with rendered fields. Read-only: no auth, no crafted requests, no
+# stored values. OVERFETCH=0 disables; PROTECTED_URLS adds logged-out checks of protected routes.
+if [ "${OVERFETCH:-1}" = "1" ] && have python3 && python3 -c 'import playwright' 2>/dev/null; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/overfetch-check.py" "$OUT"; then
+    rec "4b-overfetch" ok "$(jq -r '"\(.over_fetch|length) delivered-not-rendered endpoint(s); control_ok=\(.control_ok)"' "$OUT/4b-overfetch.json" 2>/dev/null)"
+  else rec "4b-overfetch" failed "overfetch-check.py error"; fi
+else rec "4b-overfetch" skipped "OVERFETCH=0 or python3/playwright not available"; fi
 
 # ---------- 5. Responsive screenshots (for UI / CSS review) ----------
 # Notes:

@@ -223,6 +223,22 @@ STANDARDS = {
         "why_pass": "Status 200, no noindex, not robots-blocked, self-canonical — the page "
         "is eligible for the Google index.",
     },
+    "api-excessive-data": {
+        "title": "Backend returns fields the page never uses (excessive data exposure)",
+        "standard": "OWASP API Security Top 10 (2023) — API3:2023 Broken Object Property Level Authorization",
+        "url": "https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/",
+        "frameworks": {
+            "OWASP API": "API3:2023",
+            "OWASP ASVS": "V8 Data Protection",
+            "NIST CSF 2.0": "PR.DS-01 (data-at-rest / minimization)",
+        },
+        "why_fail": "A JSON response delivered to an anonymous visitor contained fields the page "
+        "never displays. Any logged-out visitor can read them in the network response even though "
+        "the UI hides them. Return only the fields each view needs (a database view or an explicit "
+        "select list), and enforce it server-side rather than relying on the client not to show them.",
+        "why_pass": "Anonymous responses carry only the fields the page renders — no hidden columns "
+        "reach a logged-out visitor.",
+    },
     # -------------------------------------------------------- ACCESSIBILITY --
     # axe rule ids resolve to these via AXE_WCAG below; the most common are listed.
     "color-contrast": {

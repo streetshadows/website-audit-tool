@@ -6,7 +6,27 @@ set -uo pipefail
 
 TARGET="${1:-https://example.com}"
 domain=$(echo "$TARGET" | sed -E 's#^https?://##; s#/.*##')
-OUT="./audit"; mkdir -p "$OUT"
+OUT="${OUT_DIR:-./audit}"; mkdir -p "$OUT"
+
+# Every stage writes to a fixed filename, and several stages read their own output back to
+# decide ok/failed (SSL Labs grade, dom.html, a11y/SEO counts). A file left by the previous run
+# would be read as this run's result — e.g. an SSL Labs timeout reported ok with the old grade.
+# So move the previous run's generated artifacts into $OUT/previous-run/ (replacing any older
+# copy). Only files this pipeline writes are moved; report-assets/ and anything else is untouched.
+rotate_previous_run(){
+  local prev="$OUT/previous-run" items
+  shopt -s nullglob
+  items=("$OUT"/0-run-status.* "$OUT"/1-dns.txt "$OUT"/1-httpx.json "$OUT"/1-rdap-*.json "$OUT"/1-whois.txt
+         "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
+         "$OUT"/4-urlscan* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
+         "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
+         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep)
+  shopt -u nullglob
+  [ ${#items[@]} -eq 0 ] && return 0
+  rm -rf -- "$prev" && mkdir -p "$prev" && mv -- "${items[@]}" "$prev/" \
+    && echo "== Previous run's artifacts moved to $prev/ =="
+}
+rotate_previous_run
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 echo "== Target: $TARGET  (domain: $domain) =="
 
@@ -253,7 +273,7 @@ if have jq && [ -s "$OUT/2-tls-ssllabs.json" ]; then
     jq -r '.certs[0]? | "cert: \(.subject) | issuer \(.issuerSubject) | \(.keyAlg) \(.keySize) \(.sigAlg)"' "$OUT/2-tls-ssllabs.json"
   } 2>/dev/null | tee "$OUT/2-tls-ssllabs.txt"
 fi
-sl_st=$(jq -r '.status // "no-response"' "$OUT/2-tls-ssllabs.json" 2>/dev/null)
+sl_st=$(jq -r '.status // "no-response"' "$OUT/2-tls-ssllabs.json" 2>/dev/null); sl_st="${sl_st:-no-response}"
 if [ "$sl_st" = "READY" ]; then
   rec "2-tls-ssllabs" ok "grade $(jq -r '[.endpoints[]?.grade]|unique|join("/")' "$OUT/2-tls-ssllabs.json" 2>/dev/null)"
 else rec "2-tls-ssllabs" failed "did not complete (status=$sl_st)"; fi

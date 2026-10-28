@@ -78,11 +78,17 @@ To install Claude Code itself for the AI-driven report step, see the
 # tuning (all optional):
 MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.3 \
 SEO_MAX_PAGES=500 QA_MAX_PAGES=40 QA_VIEWPORTS="390,768,1440" \
+OUT_DIR=./audit/example.com \
   ./run-audit.sh https://example.com
 ```
 
 Read `audit/0-run-status.json` first — it records every stage as `ok / failed /
 skipped` (+ reason), so a degraded run is explicit rather than silent.
+
+Artifacts go to `OUT_DIR` (default `./audit`). Re-running into the same directory first
+moves the previous run's generated files into `<OUT_DIR>/previous-run/`, so a stage that
+produces nothing this time can never be read back from the last run. Anything else in the
+directory (e.g. `report-assets/`) is left alone.
 
 ### 2. Report (AI-authored PDF)
 

@@ -9,11 +9,12 @@ large multi-page site (bounded by caps).
 # tuning (all optional):
 MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.3 \
 SEO_MAX_PAGES=500 QA_MAX_PAGES=40 QA_VIEWPORTS="390,768,1440" \
+OUT_DIR=./audit/example.com \
 URLSCAN_API_KEY=... PERF_STRATEGIES="mobile,desktop" \
   ./run-audit.sh https://example.com
 ```
 
-## Stages (artifacts written to ./audit/)
+## Stages (artifacts written to `$OUT_DIR`, default ./audit/; the previous run is moved to `previous-run/`)
 
 | # | Stage | Script | Scope | Output |
 |---|-------|--------|-------|--------|

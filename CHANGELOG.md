@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-10-28 — Correctness fixes: no stage reports OK without measuring
+
+- **Scripts are executable.** `run-audit.sh`, the SessionStart hook and the collectors
+  were committed without the exec bit, so the web hook and `./run-audit.sh` failed on a
+  fresh checkout.
+- **Playwright/Chromium drift.** The hook now installs the Python Playwright matching the
+  image's preinstalled browser (no hard pin); preflight launch-tests the browser and falls
+  back to a preinstalled Chromium (`PW_CHROMIUM_EXECUTABLE`), recorded as `preflight-browser`.
+- **Accessibility under a strict CSP.** axe-core is injected with `bypass_csp`; the stage
+  verifies axe loaded, reports `axe_pages_scanned`, and fails if axe ran on no page.
+- **Contrast on modern colour spaces.** `oklch()`/`lab()`/`color()` values are converted
+  to sRGB before scoring; unparseable colours are indeterminate, never failures.
+- **DNS resolver failure.** An unreachable or failing resolver now fails stage 1 instead
+  of producing a DNSSEC verdict from `dig` error text. RDAP domain and IP are recorded
+  separately.
+- **Stale artifacts.** `OUT_DIR` selects the output directory, and the previous run's
+  generated files are moved to `previous-run/` first, so a failed stage can't be scored
+  from the last run's output.
+
 ## 2026-07-24 — Public-release readiness
 
 Final cleanup before opening the repository publicly.

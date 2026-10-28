@@ -3,14 +3,79 @@
   "app": "Website Audit Toolkit",
   "repo": "streetshadows/website-audit-tool",
   "description": "Public, canonical home of the 11-stage website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
-  "lastUpdated": "2026-09-22T05:30:00.000Z",
-  "session": "2026-09-22 - [implement] ops/status.json created for the external status mirror; seeded from the repo's own docs and recent history (0 open tasks, 0 human actions, 8 completed).",
+  "lastUpdated": "2026-10-28T12:00:00.000Z",
+  "session": "2026-10-28 - [implement] P0 correctness fixes from field feedback (exec bits, Playwright/Chromium drift, axe under strict CSP, modern-colour contrast, DNS resolver-failure detection, RDAP split, OUT_DIR + previous-run rotation); status-file wording generalised. P1/P2 queued.",
   "sprint": {
-    "name": "Public release",
-    "focus": "Released 2026-07-27. Dependabot keeps dependencies current; no feature work open."
+    "name": "Field-feedback hardening",
+    "focus": "Remove silent false-OK results first (P0, done), then request-rate conduct and SPA accuracy (P1), then new passive checks (P2)."
   },
-  "tasks": [],
+  "tasks": [
+    {
+      "id": "WAT-P1-LINKS",
+      "title": "Throttle, dedupe and cap link checks (HEAD with GET fallback, honour DELAY, QA_MAX_LINKS); one configurable AUDIT_UA",
+      "priority": "High",
+      "status": "pending",
+      "notes": "qa-check.py and seo-check.py currently send unthrottled GETs"
+    },
+    {
+      "id": "WAT-P1-DEEP",
+      "title": "Stage 6 deep pages: use the requested target and SEED_URLS, record each deep page in run status",
+      "priority": "Medium",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P1-SPA",
+      "title": "SPA accuracy: soft-404 probe, rendered-DOM h1 fallback, overflow-x scroller exemption for edge-clipping",
+      "priority": "Medium",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P1-OPTS",
+      "title": "HOST_STAGES=0 (recorded as skipped) and SHOT_WIDTHS options; DoH as a labelled DNS fallback",
+      "priority": "Low",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P2-OVERFETCH",
+      "title": "Anonymous API over-fetch stage (schema only, never values; mandatory public-page control)",
+      "priority": "Medium",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P2-AUTHCFG",
+      "title": "Opt-in BaaS auth-settings read when detected; ACAO wildcard info check in headers stage",
+      "priority": "Low",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P2-REPORT",
+      "title": "Report: chain ranking, plan-dependency rule, addendum flow mode (report_lib + REPORT-TEMPLATE together), standards entries",
+      "priority": "Medium",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": "WAT-P2-DIFF",
+      "title": "Run-to-run diff of key metrics against previous-run/",
+      "priority": "Low",
+      "status": "pending",
+      "notes": ""
+    }
+  ],
   "completedTasks": [
+    {
+      "id": "WAT-1028-P0",
+      "title": "P0 field-feedback fixes: exec bits, Playwright drift fallback, axe bypass_csp + fail-loud, sRGB contrast, DNS failure detection, RDAP split, OUT_DIR + previous-run rotation",
+      "priority": "Critical",
+      "status": "done",
+      "completedDate": "2026-10-28",
+      "notes": ""
+    },
     {
       "id": "WAT-DEPS-0922",
       "title": "Dependabot: python-deps group + github-actions group bumps merged (PRs #3, #4)",
@@ -76,7 +141,29 @@
       "notes": ""
     }
   ],
-  "humanActions": [],
+  "humanActions": [
+    {
+      "item": "Decide on a git history cleanup (details in the owner's session notes, not here)",
+      "priority": "High",
+      "linkedTask": "WAT-1028-P0",
+      "dueDate": "",
+      "notes": ""
+    },
+    {
+      "item": "Decide scope for authenticated/active BaaS probes (recommendation: owner-side guide, not automated stages)",
+      "priority": "Medium",
+      "linkedTask": "",
+      "dueDate": "",
+      "notes": ""
+    },
+    {
+      "item": "Review and merge branch ccr-a71fd783-kyvi7z",
+      "priority": "High",
+      "linkedTask": "WAT-1028-P0",
+      "dueDate": "",
+      "notes": ""
+    }
+  ],
   "health": {
     "visibility": "public",
     "ci": "GitHub Actions; Dependabot weekly"

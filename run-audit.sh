@@ -150,8 +150,13 @@ if have dig; then
   # DNSKEY) and ANCHORED at the parent (a DS record) — not by the AD "authenticated
   # data" flag, which is resolver-dependent (a non-validating resolver never sets it,
   # and it can also match spuriously), giving false positives/negatives.
-  dnskey="$(dig +short DNSKEY "$domain" 2>/dev/null)"
-  ds="$(dig +short DS "$domain" 2>/dev/null)"
+  # `dig +short` prints nothing both for "no such record" and for "no resolver reachable", so
+  # probe the resolver first (SOA, full output for the rcode) and check each DNSSEC lookup's exit
+  # code: an unreachable resolver must be a failed stage, never "DNSSEC:off".
+  soa_probe="$(dig +time=3 +tries=2 SOA "$domain" 2>&1)"; dig_rc=$?
+  dns_rcode="$(printf '%s\n' "$soa_probe" | sed -nE 's/.*status: ([A-Z]+).*/\1/p' | head -1)"
+  dnskey="$(dig +time=3 +tries=2 +short DNSKEY "$domain" 2>/dev/null)"; dnskey_rc=$?
+  ds="$(dig +time=3 +tries=2 +short DS "$domain" 2>/dev/null)"; ds_rc=$?
   {
     echo "### A";     dig +short A "$domain"
     echo "### AAAA";  dig +short AAAA "$domain"
@@ -164,18 +169,26 @@ if have dig; then
     echo "### SOA";   dig +short SOA "$domain"
     echo "### DNSSEC"; echo "DNSKEY:"; printf '%s\n' "$dnskey"; echo "DS (parent):"; printf '%s\n' "$ds"
   } | tee "$OUT/1-dns.txt"
-  if   [ -z "$dnskey" ]; then dnssec="DNSSEC:off (unsigned)"
-  elif [ -z "$ds" ];     then dnssec="DNSSEC:partial (zone signed; no DS at parent — not anchored)"
-  else                        dnssec="DNSSEC:on"; fi
-  mx=$(grep -A1 "### MX" "$OUT/1-dns.txt" | tail -1); [ -z "$mx" ] && mx="no-MX"
-  rec "1-dns" ok "dig OK; ${dnssec}"
+  if [ "$dig_rc" -ne 0 ] || [ -z "$dns_rcode" ]; then
+    rec "1-dns" failed "resolver unreachable (dig exit $dig_rc) — no DNS data; DNSSEC not determined"
+  elif [ "$dns_rcode" != "NOERROR" ]; then
+    rec "1-dns" failed "resolver answered $dns_rcode for $domain — DNS records and DNSSEC not determined"
+  elif [ "$dnskey_rc" -ne 0 ] || [ "$ds_rc" -ne 0 ]; then
+    rec "1-dns" failed "dig OK but DNSKEY/DS lookup failed (exit $dnskey_rc/$ds_rc) — DNSSEC not determined"
+  else
+    if   [ -z "$dnskey" ]; then dnssec="DNSSEC:off (unsigned)"
+    elif [ -z "$ds" ];     then dnssec="DNSSEC:partial (zone signed; no DS at parent — not anchored)"
+    else                        dnssec="DNSSEC:on"; fi
+    rec "1-dns" ok "dig OK; ${dnssec}"
+  fi
 else rec "1-dns" skipped "dig (dnsutils) not installed"; fi
 
 # 1b. Registration data via RDAP over HTTPS (port 443) — the IETF replacement for
 # port-43 whois (RFC 7480-7484). Works where whois/43 is firewalled. rdap.org is the
 # IANA-backed bootstrap that redirects to the authoritative registry/RIR. We query
 # both the DOMAIN (registrar, dates, status, nameservers) and the IP (network/org).
-IP=$(dig +short A "$domain" 2>/dev/null | head -1)
+# dig +short prints resolver errors (";; communications error ...") on stdout: keep only an IPv4.
+IP=$(dig +time=3 +tries=2 +short A "$domain" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
 rdap_dom="$OUT/1-rdap-domain.json"; rdap_ip="$OUT/1-rdap-ip.json"
 curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/domain/$domain" -o "$rdap_dom" || true
 [ -n "$IP" ] && curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/ip/$IP" -o "$rdap_ip" || true
@@ -196,14 +209,18 @@ curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://r
            (.entities[]? | "org: \((.roles // []) | join("/")) = \(.vcardArray[1]? | map(select(.[0]=="fn"))[0][3] // .handle // "?")")' "$rdap_ip"
   else echo "(IP RDAP unavailable)"; fi
 } | tee "$OUT/1-whois.txt"
-# fallback to classic whois only if RDAP gave nothing and port 43 happens to be open
-if ! grep -qE "handle:|network:" "$OUT/1-whois.txt"; then
-  if have whois && timeout 20 whois "$IP" 2>&1 | grep -iE "netname|org|country|inetnum|netrange|origin" >> "$OUT/1-whois.txt"; then
-    rec "1-rdap" ok "RDAP empty; classic whois/43 fallback succeeded"
-  else rec "1-rdap" failed "RDAP returned no data and whois/43 unavailable"; fi
-else
-  rec "1-rdap" ok "registration data via RDAP/HTTPS (domain + IP)"
-fi
+# Domain and IP registration are recorded separately: one succeeding must not mask the other.
+if have jq && jq -e .objectClassName "$rdap_dom" >/dev/null 2>&1; then
+  rec "1-rdap-domain" ok "domain registration via RDAP/HTTPS"
+else rec "1-rdap-domain" failed "domain RDAP returned no data (registrar/dates/status unknown)"; fi
+if [ -z "$IP" ]; then
+  rec "1-rdap-ip" skipped "no A record resolved — IP registration not looked up"
+elif have jq && jq -e .objectClassName "$rdap_ip" >/dev/null 2>&1; then
+  rec "1-rdap-ip" ok "IP network registration via RDAP/HTTPS"
+# fallback to classic whois only if IP RDAP gave nothing and port 43 happens to be open
+elif have whois && timeout 20 whois "$IP" 2>&1 | grep -iE "netname|org|country|inetnum|netrange|origin" >> "$OUT/1-whois.txt"; then
+  rec "1-rdap-ip" ok "IP RDAP empty; classic whois/43 fallback succeeded"
+else rec "1-rdap-ip" failed "IP RDAP returned no data and whois/43 unavailable"; fi
 if [ -n "$HTTPX" ]; then
   if "$HTTPX" -u "$TARGET" -title -status-code -server -tech-detect -tls-grab -json -o "$OUT/1-httpx.json" -silent \
      && [ -s "$OUT/1-httpx.json" ]; then

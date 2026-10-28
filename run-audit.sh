@@ -191,6 +191,45 @@ if host_off; then
   for st in 1-dns 1-rdap-domain 1-rdap-ip 1-httpx 2-tls-ssllabs; do rec "$st" skipped "$HOST_SKIP"; done
 else
 # ---------- 1. DNS / infrastructure ----------
+# DNS-over-HTTPS fallback (DNS_DOH=0 disables): when the local resolver cannot be used (blocked
+# or filtered egress, missing dig), the same records come from a public DoH resolver over 443.
+# The result is labelled "via DoH" in run status: the vantage is that resolver, not the site's
+# users' resolvers, and the domain name is sent to it (see THIRD-PARTY-TOOLS.md).
+DOH_URL="${DOH_URL:-https://cloudflare-dns.com/dns-query}"
+dnssec_verdict(){
+  if   [ -z "$dnskey" ]; then echo "DNSSEC:off (unsigned)"
+  elif [ -z "$ds" ];     then echo "DNSSEC:partial (zone signed; no DS at parent — not anchored)"
+  else                        echo "DNSSEC:on"; fi
+}
+doh_raw(){ curl -sS --max-time 10 -A "$UA" -H 'accept: application/dns-json' "$DOH_URL?name=$1&type=$2" 2>/dev/null; }
+doh_q(){  # $1 name, $2 type -> answer data of that type only (CNAME hops dropped); non-zero on failure
+  local code r
+  case "$2" in A) code=1;; AAAA) code=28;; NS) code=2;; MX) code=15;; TXT) code=16;;
+               CAA) code=257;; SOA) code=6;; DNSKEY) code=48;; DS) code=43;; *) return 2;; esac
+  r="$(doh_raw "$1" "$2")" && printf '%s' "$r" | jq -e 'has("Status")' >/dev/null 2>&1 || return 1
+  printf '%s' "$r" | jq -r --argjson t "$code" '(.Answer // [])[] | select(.type == $t) | .data'
+}
+dns_via_doh(){  # fills 1-dns.txt, dnskey/ds and IP from DoH; sets doh_fail and returns 1 on failure
+  local st
+  st="$(doh_raw "$domain" SOA | jq -r '.Status // empty' 2>/dev/null)"
+  if [ -z "$st" ]; then doh_fail="DoH resolver unreachable ($DOH_URL)"; return 1; fi
+  if [ "$st" = "3" ]; then doh_fail="DoH also answers NXDOMAIN — the domain does not resolve"; return 1; fi
+  if [ "$st" != "0" ]; then doh_fail="DoH answered DNS rcode $st"; return 1; fi
+  dnskey="$(doh_q "$domain" DNSKEY)" && ds="$(doh_q "$domain" DS)" \
+    || { doh_fail="DoH DNSKEY/DS lookup failed"; return 1; }
+  {
+    echo "### SOURCE: DNS-over-HTTPS ($DOH_URL) — local resolver unusable: $dns_fail"
+    for t in A AAAA NS MX TXT; do echo "### $t"; doh_q "$domain" "$t"; done
+    echo "### SPF";   doh_q "$domain" TXT | grep -i spf
+    echo "### DMARC"; doh_q "_dmarc.$domain" TXT
+    echo "### CAA";   doh_q "$domain" CAA
+    echo "### SOA";   doh_q "$domain" SOA
+    echo "### DNSSEC"; echo "DNSKEY:"; printf '%s\n' "$dnskey"; echo "DS (parent):"; printf '%s\n' "$ds"
+  } | tee "$OUT/1-dns.txt"
+  IP="$(doh_q "$domain" A | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)"
+}
+
+dns_fail="" IP=""
 if have dig; then
   # DNSSEC is determined authoritatively by whether the zone is SIGNED (publishes a
   # DNSKEY) and ANCHORED at the parent (a DS record) — not by the AD "authenticated
@@ -215,26 +254,29 @@ if have dig; then
     echo "### SOA";   dig +short SOA "$domain"
     echo "### DNSSEC"; echo "DNSKEY:"; printf '%s\n' "$dnskey"; echo "DS (parent):"; printf '%s\n' "$ds"
   } | tee "$OUT/1-dns.txt"
-  if [ "$dig_rc" -ne 0 ] || [ -z "$dns_rcode" ]; then
-    rec "1-dns" failed "resolver unreachable (dig exit $dig_rc) — no DNS data; DNSSEC not determined"
-  elif [ "$dns_rcode" != "NOERROR" ]; then
-    rec "1-dns" failed "resolver answered $dns_rcode for $domain — DNS records and DNSSEC not determined"
-  elif [ "$dnskey_rc" -ne 0 ] || [ "$ds_rc" -ne 0 ]; then
-    rec "1-dns" failed "dig OK but DNSKEY/DS lookup failed (exit $dnskey_rc/$ds_rc) — DNSSEC not determined"
-  else
-    if   [ -z "$dnskey" ]; then dnssec="DNSSEC:off (unsigned)"
-    elif [ -z "$ds" ];     then dnssec="DNSSEC:partial (zone signed; no DS at parent — not anchored)"
-    else                        dnssec="DNSSEC:on"; fi
-    rec "1-dns" ok "dig OK; ${dnssec}"
+  if [ "$dig_rc" -ne 0 ] || [ -z "$dns_rcode" ]; then dns_fail="resolver unreachable (dig exit $dig_rc)"
+  elif [ "$dns_rcode" != "NOERROR" ]; then dns_fail="resolver answered $dns_rcode for $domain"
+  elif [ "$dnskey_rc" -ne 0 ] || [ "$ds_rc" -ne 0 ]; then dns_fail="DNSKEY/DS lookup failed (exit $dnskey_rc/$ds_rc)"
+  else rec "1-dns" ok "dig OK; $(dnssec_verdict)"
   fi
-else rec "1-dns" skipped "dig (dnsutils) not installed"; fi
+  # dig +short prints resolver errors (";; communications error ...") on stdout: keep only an IPv4.
+  [ -z "$dns_fail" ] && IP=$(dig +time=3 +tries=2 +short A "$domain" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
+else dns_fail="dig (dnsutils) not installed"; fi
+if [ -n "$dns_fail" ]; then
+  if [ "${DNS_DOH:-1}" = "0" ]; then
+    rec "1-dns" failed "$dns_fail — no DNS data; DNSSEC not determined (DoH fallback disabled: DNS_DOH=0)"
+  elif dns_via_doh; then
+    rec "1-dns" ok "via DoH ($DOH_URL) — local $dns_fail; resolver vantage differs; $(dnssec_verdict)"
+  else
+    rec "1-dns" failed "$dns_fail; DoH fallback: $doh_fail — DNS records and DNSSEC not determined"
+  fi
+fi
 
 # 1b. Registration data via RDAP over HTTPS (port 443) — the IETF replacement for
 # port-43 whois (RFC 7480-7484). Works where whois/43 is firewalled. rdap.org is the
 # IANA-backed bootstrap that redirects to the authoritative registry/RIR. We query
 # both the DOMAIN (registrar, dates, status, nameservers) and the IP (network/org).
 # dig +short prints resolver errors (";; communications error ...") on stdout: keep only an IPv4.
-IP=$(dig +time=3 +tries=2 +short A "$domain" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
 rdap_dom="$OUT/1-rdap-domain.json"; rdap_ip="$OUT/1-rdap-ip.json"
 curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/domain/$domain" -o "$rdap_dom" || true
 [ -n "$IP" ] && curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/ip/$IP" -o "$rdap_ip" || true

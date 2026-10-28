@@ -19,6 +19,7 @@ from collections import defaultdict
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared per-host pacing (sibling module)
 import standards  # standards & best-practice knowledge base (sibling module)
 
 FORCE = (
@@ -116,6 +117,7 @@ def main():
             pg = ctx.new_page()
             rec = {"violations": [], "error": None, "axe_ran": False}
             try:
+                netutil.PACER.wait(u)
                 pg.goto(u, wait_until="networkidle", timeout=45000)
                 pg.evaluate(FORCE)
                 pg.wait_for_timeout(700)

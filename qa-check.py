@@ -33,6 +33,9 @@ from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA, per-host pacing and link checking (sibling module)
+
 try:
     from PIL import Image, ImageStat
 
@@ -222,6 +225,7 @@ def analyze_images(rp, img_urls, page_dark):
     bleed, clash = {}, {}
     for u in sorted(img_urls):
         try:
+            netutil.PACER.wait(u)
             body = rp.request.get(u, timeout=15000).body()
             im = Image.open(io.BytesIO(body)).convert("RGB")
             w, h = im.size
@@ -348,19 +352,26 @@ def main():
                         img_urls.add(urljoin(url, im["src"]))
             ctx.close()
 
-        api = browser.new_context(ignore_https_errors=True)
+        api = browser.new_context(ignore_https_errors=True, user_agent=netutil.AUDIT_UA)
         rp = api.new_page()
-        broken, bot_blocked = {}, {}
-        for u in sorted(link_urls | img_urls):
+
+        def link_status(u, method):
             try:
-                r = rp.request.get(u, timeout=15000)
-                if r.status >= 400:
-                    host = urlparse(u).netloc.lower()
-                    (bot_blocked if any(host.endswith(d) for d in BOT_BLOCK_DOMAINS) else broken)[u] = r.status
+                return rp.request.fetch(u, method=method, timeout=15000).status
             except Exception as e:
-                broken[u] = f"error: {str(e)[:60]}"
+                return f"error: {str(e)[:60]}"
+
+        broken, bot_blocked = {}, {}
+        checked, not_checked = netutil.check_links(link_urls | img_urls, link_status)
+        for u, st in checked.items():
+            if not isinstance(st, int):
+                broken[u] = st
+            elif st >= 400:
+                host = urlparse(u).netloc.lower()
+                (bot_blocked if any(host.endswith(d) for d in BOT_BLOCK_DOMAINS) else broken)[u] = st
         report["links"] = {
-            "checked": len(link_urls | img_urls),
+            "checked": len(checked),
+            "not_checked_cap": not_checked,
             "broken": broken,
             "likely_bot_blocked_verify_manually": bot_blocked,
         }
@@ -438,6 +449,8 @@ def main():
         L.append(f"    {it['src']}\n        -> {', '.join(it['flags'])}")
     lk = report["links"]
     L.append(f"[links] checked {lk['checked']}, broken {len(lk['broken'])}")
+    if lk.get("not_checked_cap"):
+        L.append(f"[links] [!] {len(lk['not_checked_cap'])} link(s) NOT checked (QA_MAX_LINKS cap)")
     for u, s in lk["broken"].items():
         L.append(f"    BROKEN {s}  {u}")
     if lk["likely_bot_blocked_verify_manually"]:

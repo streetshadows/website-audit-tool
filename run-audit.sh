@@ -20,7 +20,7 @@ rotate_previous_run(){
          "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
          "$OUT"/4-urlscan* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
          "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
-         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep)
+         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep "$OUT"/link-cache.json)
   shopt -u nullglob
   for p in "${items[@]}"; do [ -e "$p" ] && found+=("$p"); done   # literal names survive nullglob
   [ ${#found[@]} -eq 0 ] && return 0
@@ -28,7 +28,14 @@ rotate_previous_run(){
     && echo "== Previous run's artifacts moved to $prev/ =="
 }
 rotate_previous_run
-UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+# Request identity and pacing, shared with every Python collector via netutil.py. Part of the
+# audit design, not tuning: the default UA identifies the audit so the site owner can separate it
+# from real traffic (set AUDIT_UA to a browser string for a WAF that treats bots differently), and
+# DELAY is the minimum gap in seconds between requests to the same host across all HTTP stages.
+export AUDIT_UA="${AUDIT_UA:-Mozilla/5.0 (compatible; WebsiteAudit/1.0; +https://github.com/streetshadows/website-audit-tool)}"
+export DELAY="${DELAY:-0.4}"
+export LINK_CACHE="$OUT/link-cache.json"   # one cross-stage link-check cache per run
+UA="$AUDIT_UA"
 echo "== Target: $TARGET  (domain: $domain) =="
 
 have(){ command -v "$1" >/dev/null 2>&1; }
@@ -118,6 +125,10 @@ trap write_status EXIT   # write the manifest even if the script is interrupted
 # are printed and recorded so coverage is explicit from the first line of output.
 preflight(){
   echo "== Preflight: prerequisite self-test =="
+  printf '  [info]    request pacing: DELAY=%ss per host; MAX_PAGES=%s; QA_MAX_LINKS=%s\n' \
+    "$DELAY" "${MAX_PAGES:-150}" "${QA_MAX_LINKS:-300}"
+  printf '  [info]    user-agent (HTTP stages): %s\n' "$AUDIT_UA"
+  rec "run-identity" ok "started $(date -u +%Y-%m-%dT%H:%M:%SZ); UA=$AUDIT_UA; DELAY=${DELAY}s"
   local missing_core=() missing_supp=() t
   # name:kind  (core|supp)  — checker
   local core="python3 dig curl jq nuclei whatweb shot-scraper aspell node"
@@ -416,6 +427,7 @@ if have python3; then
   else rec "10-perf" failed "no Lighthouse scores (check lighthouse install / CHROME_PATH)"; fi
 else rec "10-perf" skipped "python3 not installed"; fi
 
+rec "run-end" ok "finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 write_status; trap - EXIT
 echo "== Done. Artifacts in $OUT/ =="
 echo "Run status: $OUT/0-run-status.txt  (per-stage ok/failed/skipped)"

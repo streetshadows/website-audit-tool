@@ -14,7 +14,7 @@ Cross-page: duplicate titles / descriptions, missing tags.
 Site-wide: broken internal + external links (checked once, deduped).
 
 Usage: seo-check.py <out_dir>
-Env: SEO_MAX_PAGES(300) CHECK_LINKS(1)
+Env: SEO_MAX_PAGES(300) CHECK_LINKS(1) + netutil: AUDIT_UA DELAY QA_MAX_LINKS LINK_CACHE
 """
 
 import json
@@ -26,20 +26,22 @@ from collections import defaultdict
 from urllib.parse import urldefrag, urljoin, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA, per-host pacing and link checking (sibling module)
 import standards  # standards & best-practice knowledge base (sibling module)
 
-UA = "Mozilla/5.0 (compatible; SiteAudit/1.0)"
+UA = netutil.AUDIT_UA
 
 
 def fetch(url, timeout=20):
+    netutil.PACER.wait(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
 
 
-def status(url, timeout=15):
+def status(url, method="GET", timeout=15):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="GET")
+        req = urllib.request.Request(url, headers={"User-Agent": UA}, method=method)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status
     except urllib.error.HTTPError as e:
@@ -237,11 +239,11 @@ def main():
     dup_descs = {d[:50] + "...": us for d, us in descs.items() if len(us) > 1}
 
     # site-wide broken links (deduped, capped)
-    broken = {}
+    broken, links_not_checked = {}, []
     if os.environ.get("CHECK_LINKS", "1") == "1":
         BOT = ("medium.com", "facebook.com", "linkedin.com", "twitter.com", "x.com", "instagram.com", "youtube.com")
-        for lu in sorted(all_links)[:400]:
-            s = status(lu)
+        checked, links_not_checked = netutil.check_links(all_links, status)
+        for lu, s in checked.items():
             if isinstance(s, int) and s >= 400:
                 h = urlparse(lu).netloc.lower()
                 broken[lu] = {"status": s, "likely_bot_block": any(h.endswith(b) for b in BOT)}
@@ -253,6 +255,8 @@ def main():
         "duplicate_titles": dup_titles,
         "duplicate_descriptions": dup_descs,
         "broken_links": broken,
+        "links_found": len(all_links),
+        "links_not_checked_cap": links_not_checked,
         "pages": pages,
     }
 
@@ -317,6 +321,11 @@ def main():
     L.append(f"duplicate titles: {len(dup_titles)}; duplicate descriptions: {len(dup_descs)}")
     real_broken = {u: d for u, d in broken.items() if not d["likely_bot_block"]}
     L.append(f"broken links: {len(real_broken)} (+{len(broken) - len(real_broken)} likely bot-blocked)")
+    if links_not_checked:
+        L.append(
+            f"    [!] {len(links_not_checked)} of {len(all_links)} link(s) NOT checked (QA_MAX_LINKS cap) — "
+            "raise the cap to cover them"
+        )
     for u, d in list(real_broken.items())[:15]:
         L.append(f"    {d['status']}  {u}")
     L.append("")

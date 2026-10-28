@@ -23,6 +23,9 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared per-host pacing (sibling module)
+
 FORCE = (
     "document.querySelectorAll('[class*=reveal],[data-aos]').forEach(function(e){"
     "e.classList.add('in-view','aos-animate','visible');e.style.opacity=1;e.style.transform='none';});"
@@ -93,6 +96,7 @@ def main():
                 )
                 pg = ctx.new_page()
                 try:
+                    netutil.PACER.wait(u)
                     pg.goto(u, wait_until="networkidle", timeout=45000)
                     pg.evaluate(FORCE)
                     pg.wait_for_timeout(800)

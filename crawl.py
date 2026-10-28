@@ -23,12 +23,14 @@ import json
 import os
 import re
 import sys
-import time
 import urllib.request
 from collections import deque
 from urllib.parse import urldefrag, urljoin, urlparse
 
-UA = "Mozilla/5.0 (compatible; SiteAudit/1.0; +audit)"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA + per-host pacing (sibling module)
+
+UA = netutil.AUDIT_UA
 AI_BOTS = [
     "GPTBot",
     "ClaudeBot",
@@ -51,6 +53,7 @@ SKIP_EXT = re.compile(
 
 
 def get(url, timeout=20):
+    netutil.PACER.wait(url)  # every crawl request (robots, well-known, sitemaps, BFS) is paced
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = r.read()
@@ -146,7 +149,7 @@ def collect_sitemap(url, seen, urls, cap, depth=0):
                 urls.add(n)
 
 
-def link_bfs(base, base_host, cap, max_depth, delay, include_sub):
+def link_bfs(base, base_host, cap, max_depth, include_sub):
     seen, pages, q = set(), set(), deque([(base, 0)])
     while q and len(pages) < cap:
         url, d = q.popleft()
@@ -170,7 +173,6 @@ def link_bfs(base, base_host, cap, max_depth, delay, include_sub):
                 continue
             if nu not in pages:
                 q.append((nu, d + 1))
-        time.sleep(delay)
     return pages
 
 
@@ -184,11 +186,14 @@ def main():
     base_host = urlparse(base).netloc
     cap = int(os.environ.get("MAX_PAGES", 150))
     max_depth = int(os.environ.get("MAX_DEPTH", 4))
-    delay = float(os.environ.get("DELAY", 0.4))
     mode = os.environ.get("MODE", "auto")
     include_sub = os.environ.get("INCLUDE_SUBDOMAINS", "0") == "1"
 
-    disc = {"base": base, "host": base_host, "config": {"max_pages": cap, "max_depth": max_depth, "mode": mode}}
+    disc = {
+        "base": base,
+        "host": base_host,
+        "config": {"max_pages": cap, "max_depth": max_depth, "mode": mode, "delay_s": netutil.delay()},
+    }
 
     # robots.txt
     robots_url = f"{urlparse(base).scheme}://{base_host}/robots.txt"
@@ -252,7 +257,7 @@ def main():
         if len(urls) > 1:
             used = "sitemap"
     if used == "none" and mode in ("auto", "links"):
-        urls |= link_bfs(base, base_host, cap, max_depth, delay, include_sub)
+        urls |= link_bfs(base, base_host, cap, max_depth, include_sub)
         used = "link-crawl"
     urls = sorted(u for u in urls if same_site(urlparse(u).netloc, base_host, include_sub))[:cap]
 

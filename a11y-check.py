@@ -32,29 +32,38 @@ FORCE = (
 # computed from colours alone — that text is reported as INDETERMINATE (needs a
 # visual check) rather than emitting a bogus dark-on-dark 1:1 ratio. This is the
 # fix for the gradient-button false positive.
+# Computed colours keep their authored space (oklch()/lab()/color() from Tailwind v4 etc.),
+# so every colour is converted to 8-bit sRGB by painting it on a 1x1 canvas; reading the
+# numbers straight out of the string would treat oklch(0.7 0.1 200) as rgb(0.7,0.1,200).
+# A colour the browser can't parse is INDETERMINATE, never a failure.
 CONTRAST_JS = r"""
 () => {
   const lum = c => { const a=[c[0],c[1],c[2]].map(v=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);});
     return 0.2126*a[0]+0.7152*a[1]+0.0722*a[2]; };
-  const rgb = s => { const m=(s||'').match(/\d+(\.\d+)?/g); return m?m.map(Number):null; };
+  const cx = document.createElement('canvas').getContext('2d', {willReadFrequently:true});
+  // -> [r,g,b,alpha 0-1] in sRGB, or null if the browser can't parse the colour
+  const rgb = s => { if(!s || !CSS.supports('color', s)) return null;
+    cx.clearRect(0,0,1,1); cx.fillStyle=s; cx.fillRect(0,0,1,1);
+    const d=cx.getImageData(0,0,1,1).data; return [d[0],d[1],d[2],d[3]/255]; };
   // Returns {rgb} for a solid background, or {indeterminate, reason} when a
   // gradient/image background is encountered first (colour-only contrast invalid).
   const bgInfo = el => { let e=el; while(e){ const cs=getComputedStyle(e);
     const bi=cs.backgroundImage;
     if(bi && bi!=='none') return {indeterminate:true, reason:(/gradient/i.test(bi)?'gradient background':'image background')};
     const c=rgb(cs.backgroundColor);
-    if(c&&(c.length<4||c[3]>0)&&!(c[0]===0&&c[1]===0&&c[2]===0&&c[3]===0)) return {rgb:c};
+    if(!c) return {indeterminate:true, reason:'unconvertible colour'};
+    if(c[3]>0) return {rgb:c};
     e=e.parentElement; } return {rgb:[255,255,255]}; };
   const vis = el => { const s=getComputedStyle(el),r=el.getBoundingClientRect();
     return s.display!=='none'&&s.visibility!=='hidden'&&+s.opacity>0&&r.width>0&&r.height>0&&(el.innerText||'').trim(); };
   const fails=[]; const indeterminate=[]; const seen=new Set();
   document.querySelectorAll('p,span,a,li,h1,h2,h3,h4,button,small,label,td,div').forEach(el=>{
     if(!vis(el)) return; if([...el.children].some(c=>(c.innerText||'').trim())) return; // leaf text only
-    const cs=getComputedStyle(el); const fg=rgb(cs.color); if(!fg) return;
+    const cs=getComputedStyle(el); const fg=rgb(cs.color);
     const fs=parseFloat(cs.fontSize), bold=(+cs.fontWeight>=700);
     const large=(fs>=24)||(fs>=18.66&&bold); const min=large?3.0:4.5;
     const txt=(el.innerText||'').trim().slice(0,40); const key=txt.slice(0,30)+fs;
-    const bg=bgInfo(el);
+    const bg=fg?bgInfo(el):{indeterminate:true, reason:'unconvertible colour'};
     if(bg.indeterminate){ if(!seen.has(key)){ seen.add(key);
       indeterminate.push({txt:txt, fs:Math.round(fs*10)/10, color:cs.color, reason:bg.reason}); } return; }
     const L1=lum(fg)+0.05, L2=lum(bg.rgb)+0.05; const ratio=Math.max(L1,L2)/Math.min(L1,L2);
@@ -101,16 +110,21 @@ def main():
             args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
         )
         for u in urls:
-            ctx = b.new_context(viewport={"width": 1280, "height": 900}, ignore_https_errors=True)
+            # bypass_csp: axe is injected as an inline script, which a strict Content-Security-Policy
+            # blocks; without this the page would silently report zero violations.
+            ctx = b.new_context(viewport={"width": 1280, "height": 900}, ignore_https_errors=True, bypass_csp=True)
             pg = ctx.new_page()
-            rec = {"violations": [], "error": None}
+            rec = {"violations": [], "error": None, "axe_ran": False}
             try:
                 pg.goto(u, wait_until="networkidle", timeout=45000)
                 pg.evaluate(FORCE)
                 pg.wait_for_timeout(700)
                 if axe_src:
                     pg.add_script_tag(content=axe_src)
+                    if pg.evaluate("typeof axe") != "object":
+                        raise RuntimeError("axe-core did not load (blocked script or page error)")
                     res = pg.evaluate("async () => await axe.run(document, {resultTypes:['violations']})")
+                    rec["axe_ran"] = True
                     for v in res.get("violations", []):
                         rec["violations"].append(
                             {
@@ -142,15 +156,19 @@ def main():
 
     n_fail = sum(len(v) for v in contrast_pages.values())
     n_indet = sum(len(v) for v in contrast_indeterminate.values())
+    axe_pages = sum(1 for r in pages.values() if r["axe_ran"])
     # Deterministic quality flags — thresholds that say when a human/AI visual pass is warranted.
     flags = []
     if not axe_src:
         flags.append("axe-core could not be fetched — only the independent contrast check ran.")
+    elif axe_pages < len(pages):
+        flags.append(f"axe-core ran on only {axe_pages}/{len(pages)} page(s) — the rest have NO axe results.")
     if errors:
         flags.append(f"{len(errors)} page(s) failed to load/scan — results incomplete (see 'errors').")
     if n_indet:
         flags.append(
-            f"{n_indet} text run(s) sit on a gradient/image background — contrast is NOT "
+            f"{n_indet} text run(s) sit on a gradient/image background or use a colour that could not be "
+            "converted to sRGB — contrast is NOT "
             "auto-determinable; VISUAL CHECK REQUIRED (these are not counted as failures)."
         )
     if n_fail:
@@ -159,6 +177,7 @@ def main():
     report = {
         "engine": f"axe-core {ver}",
         "pages_checked": len(pages),
+        "axe_pages_scanned": axe_pages,
         "violations_aggregated": dict(agg),
         "contrast_independent_check": contrast_pages,
         "contrast_indeterminate": contrast_indeterminate,
@@ -179,9 +198,11 @@ def main():
 
     order = {"critical": 0, "serious": 1, "moderate": 2, "minor": 3, None: 4}
     L = ["== ACCESSIBILITY (axe-core + independent contrast cross-check) =="]
-    L.append(f"engine: axe-core {ver}; pages checked: {len(pages)}")
-    if not agg:
-        L.append("axe-core: no violations (or axe unavailable).")
+    L.append(f"engine: axe-core {ver}; pages checked: {len(pages)}; axe ran on: {axe_pages}")
+    if not axe_pages:
+        L.append("axe-core: DID NOT RUN on any page — no axe results (this is not a pass).")
+    elif not agg:
+        L.append(f"axe-core: no violations on the {axe_pages} page(s) it ran on.")
     else:
         L.append("axe-core violations (id | impact | pages | nodes | help):")
         for vid, a in sorted(agg.items(), key=lambda kv: order.get(kv[1]["impact"], 4)):
@@ -199,7 +220,8 @@ def main():
             )
     # indeterminate (gradient/image bg) — reported separately, NOT counted as failures
     L.append(
-        f"\nIndeterminate (gradient/image background — VISUAL CHECK REQUIRED, not a failure): "
+        f"\nIndeterminate (gradient/image background or unconvertible colour — VISUAL CHECK REQUIRED, "
+        f"not a failure): "
         f"{n_indet} run(s) on {len(contrast_indeterminate)} page(s)"
     )
     for _u, items in list(contrast_indeterminate.items())[:2]:
@@ -220,7 +242,9 @@ def main():
     txt = "\n".join(L)
     open(os.path.join(out, "8-a11y.txt"), "w").write(txt + "\n")
     print(txt[:2800])
-    return 0
+    # Exit 3 = artifacts written but axe never ran, so run-audit.sh records the stage as failed
+    # instead of letting an empty violation list read as a clean result.
+    return 0 if axe_pages or not pages else 3
 
 
 if __name__ == "__main__":

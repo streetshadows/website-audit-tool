@@ -356,8 +356,10 @@ else rec "8-qa-site" skipped "python3/playwright not available"; fi
 
 # ---------- 9. Accessibility (axe-core + independent contrast cross-check) ----------
 if have python3 && python3 -c 'import playwright' 2>/dev/null; then
-  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/a11y-check.py" "$OUT"; then
-    rec "9-a11y" ok "$(jq -r '.contrast_summary.genuine_failures // "?"' "$OUT/8-a11y.json" 2>/dev/null) genuine contrast fails; $(jq -r '.contrast_summary.indeterminate_gradient_or_image // 0' "$OUT/8-a11y.json" 2>/dev/null) indeterminate"
+  PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/a11y-check.py" "$OUT"; rc=$?
+  a11y_counts="$(jq -r '"axe ran on \(.axe_pages_scanned // "?")/\(.pages_checked // "?") pages; \(.contrast_summary.genuine_failures // "?") genuine contrast fails; \(.contrast_summary.indeterminate_gradient_or_image // 0) indeterminate"' "$OUT/8-a11y.json" 2>/dev/null)"
+  if   [ "$rc" -eq 0 ]; then rec "9-a11y" ok "$a11y_counts"
+  elif [ "$rc" -eq 3 ]; then rec "9-a11y" failed "axe-core did not run on any page (contrast cross-check only): $a11y_counts"
   else rec "9-a11y" failed "a11y-check.py error"; fi
 else rec "9-a11y" skipped "python3/playwright not available"; fi
 

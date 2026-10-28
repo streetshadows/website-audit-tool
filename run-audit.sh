@@ -400,7 +400,7 @@ else echo "python3/playwright missing — skipping QA section"; rec "6-qa" skipp
 
 # ---------- 7. SEO / metadata / links across ALL discovered pages ----------
 if have python3; then
-  if python3 "$HERE/seo-check.py" "$OUT"; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/seo-check.py" "$OUT"; then
     rec "7-seo" ok "$(jq -r '.pages_checked // "?"' "$OUT/5-seo.json" 2>/dev/null) pages checked"
   else rec "7-seo" failed "seo-check.py error"; fi
 else rec "7-seo" skipped "python3 not installed"; fi

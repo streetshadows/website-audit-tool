@@ -35,6 +35,14 @@ rotate_previous_run
 export AUDIT_UA="${AUDIT_UA:-Mozilla/5.0 (compatible; WebsiteAudit/1.0; +https://github.com/streetshadows/website-audit-tool)}"
 export DELAY="${DELAY:-0.4}"
 export LINK_CACHE="$OUT/link-cache.json"   # one cross-stage link-check cache per run
+# HOST_STAGES=0 skips the host-level stages (DNS/RDAP/httpx, SSL Labs, nuclei, whatweb) for repeat
+# runs against the same host, e.g. a second pass on other pages. Each is recorded as skipped.
+HOST_STAGES="${HOST_STAGES:-1}"
+case "$HOST_STAGES" in 0|1) ;; *) echo "HOST_STAGES must be 0 or 1 (got '$HOST_STAGES')"; exit 2;; esac
+host_off(){ [ "$HOST_STAGES" = "0" ]; }
+HOST_SKIP="HOST_STAGES=0 — host-level stage not run (repeat pass; see the earlier full run)"
+# Screenshot widths for stage 5 (space or comma separated).
+read -ra SHOT_W <<< "$(echo "${SHOT_WIDTHS:-390 768 1280 1440}" | tr ',' ' ')"
 UA="$AUDIT_UA"
 echo "== Target: $TARGET  (domain: $domain) =="
 
@@ -61,7 +69,7 @@ resolve_browsers(){
   local exe
   if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
     PYBROWSERS="$PLAYWRIGHT_BROWSERS_PATH"
-    pw_launch "$PYBROWSERS" && { PW_DETAIL="PLAYWRIGHT_BROWSERS_PATH=$PYBROWSERS (user-set)"; return 0; }
+    pw_launch "$PYBROWSERS" && { PW_DETAIL="PLAYWRIGHT_BROWSERS_PATH=$PYBROWSERS (from environment)"; return 0; }
   fi
   for PYBROWSERS in /opt/pw-browsers "$HOME/.cache/ms-playwright"; do
     pw_launch "$PYBROWSERS" && { PW_DETAIL="matching Chromium in $PYBROWSERS"; return 0; }
@@ -132,13 +140,15 @@ preflight(){
   local missing_core=() missing_supp=() t
   # name:kind  (core|supp)  — checker
   local core="python3 dig curl jq nuclei whatweb shot-scraper aspell node"
+  host_off && core="python3 curl jq shot-scraper aspell node"   # host-level tools not needed
   local supp="lighthouse pdftoppm convert"
   for t in $core; do
     if have "$t"; then printf '  [ok]      %s\n' "$t"; else printf '  [MISSING] %s (core)\n' "$t"; missing_core+=("$t"); fi
   done
   # httpx checked specifically: must be the ProjectDiscovery binary, not the Python lib
   # CLI of the same name (which would shadow it on PATH and break the fingerprint stage).
-  if [ -n "$HTTPX" ]; then printf '  [ok]      httpx (ProjectDiscovery: %s)\n' "$HTTPX"
+  if host_off; then printf '  [skip]    httpx/nuclei/whatweb/dig (HOST_STAGES=0)\n'
+  elif [ -n "$HTTPX" ]; then printf '  [ok]      httpx (ProjectDiscovery: %s)\n' "$HTTPX"
   elif have httpx; then printf '  [MISSING] httpx — found a non-ProjectDiscovery "httpx" (the Python library CLI) shadowing it on PATH\n'; missing_core+=("httpx")
   else printf '  [MISSING] httpx (core)\n'; missing_core+=("httpx"); fi
   if python3 -c 'import playwright' 2>/dev/null; then
@@ -176,6 +186,10 @@ if have python3; then
   else rec "0-crawl" failed "crawl.py returned non-zero"; fi
 else rec "0-crawl" skipped "python3 not installed"; fi
 
+# ---------- 1-2. Host-level stages (skipped as a block when HOST_STAGES=0) ----------
+if host_off; then
+  for st in 1-dns 1-rdap-domain 1-rdap-ip 1-httpx 2-tls-ssllabs; do rec "$st" skipped "$HOST_SKIP"; done
+else
 # ---------- 1. DNS / infrastructure ----------
 if have dig; then
   # DNSSEC is determined authoritatively by whether the zone is SIGNED (publishes a
@@ -289,6 +303,7 @@ sl_st=$(jq -r '.status // "no-response"' "$OUT/2-tls-ssllabs.json" 2>/dev/null);
 if [ "$sl_st" = "READY" ]; then
   rec "2-tls-ssllabs" ok "grade $(jq -r '[.endpoints[]?.grade]|unique|join("/")' "$OUT/2-tls-ssllabs.json" 2>/dev/null)"
 else rec "2-tls-ssllabs" failed "did not complete (status=$sl_st)"; fi
+fi  # end host-level stages 1-2
 
 # ---------- 3. Headers + misconfig + tech ----------
 {
@@ -296,7 +311,8 @@ else rec "2-tls-ssllabs" failed "did not complete (status=$sl_st)"; fi
   echo "=== HTTP (redirect check) ==="; curl -sIL -A "$UA" "http://$domain"
 } | tee "$OUT/3-headers.txt"
 if grep -qiE "^HTTP/" "$OUT/3-headers.txt"; then rec "3-headers" ok "response headers captured"; else rec "3-headers" failed "no HTTP response (egress blocked?)"; fi
-if have nuclei; then
+if host_off; then rec "3-nuclei" skipped "$HOST_SKIP"
+elif have nuclei; then
   # env -u GITHUB_TOKEN: nuclei's startup template/version check hits the GitHub API; an
   # unrelated GITHUB_TOKEN in the environment makes it 401 and abort. Templates are provisioned
   # by the session-start hook (see .claude/hooks/session-start.sh).
@@ -305,7 +321,8 @@ if have nuclei; then
     rec "3-nuclei" ok "$(wc -l < "$OUT/3-nuclei.txt" | tr -d ' ') finding(s)"
   else rec "3-nuclei" failed "nuclei returned non-zero (templates missing? run: nuclei -update-templates)"; fi
 else rec "3-nuclei" skipped "nuclei not installed"; fi
-if have whatweb; then
+if host_off; then rec "3-whatweb" skipped "$HOST_SKIP"
+elif have whatweb; then
   RUBYLIB="${RUBYLIB:-/usr/lib/ruby/vendor_ruby}" whatweb "$TARGET" | tee "$OUT/3-whatweb.txt" && rec "3-whatweb" ok "tech fingerprint captured"
 else rec "3-whatweb" skipped "whatweb not installed (tech stack inferred from httpx + DOM)"; fi
 
@@ -352,11 +369,11 @@ fi
 #    NOT scroll each section into view, so those sections render BLANK unless we
 #    force them visible. --reduced-motion triggers prefers-reduced-motion
 #    fallbacks; the JS handles common reveal patterns (.reveal/.in-view, AOS).
-# Widths: 390 mobile, 768 tablet, 1280 laptop, 1440 desktop.
+# Widths: SHOT_WIDTHS, default 390 mobile, 768 tablet, 1280 laptop, 1440 desktop.
 REVEAL_JS="document.querySelectorAll('[class*=reveal],[data-aos]').forEach(function(e){e.classList.add('in-view','aos-animate','visible');e.style.opacity=1;e.style.transform='none';});"
 if have shot-scraper; then
   ok5=0
-  for w in 390 768 1280 1440; do
+  for w in "${SHOT_W[@]}"; do
     # env -u *_PROXY: shot-scraper's Chromium mis-handles the TLS-intercepting egress proxy and
     # RSTs HTTPS. Open outbound is required (see header); --ignore-certificate-errors covers the
     # transparent interception. The Python collectors clear the same vars internally.
@@ -366,7 +383,8 @@ if have shot-scraper; then
       --browser-arg --ignore-certificate-errors --reduced-motion -j "$REVEAL_JS" --wait 1800 \
       && { echo "shot-$w.png ok"; ok5=$((ok5+1)); }
   done
-  if [ "$ok5" -eq 4 ]; then rec "5-screenshots" ok "4/4 viewports"; else rec "5-screenshots" failed "$ok5/4 viewports captured"; fi
+  if [ "$ok5" -eq "${#SHOT_W[@]}" ]; then rec "5-screenshots" ok "$ok5/${#SHOT_W[@]} viewports (${SHOT_W[*]})"
+  else rec "5-screenshots" failed "$ok5/${#SHOT_W[@]} viewports captured (${SHOT_W[*]})"; fi
 else echo "shot-scraper not installed — skipping screenshots"; rec "5-screenshots" skipped "shot-scraper not installed"; fi
 
 # ---------- 6. Website QA: UI / images / spelling / responsive (deep, per page) ----------

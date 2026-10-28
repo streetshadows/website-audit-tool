@@ -20,7 +20,7 @@ rotate_previous_run(){
          "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
          "$OUT"/4-urlscan* "$OUT"/4b-overfetch.* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
          "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
-         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/crawl "$OUT"/deep "$OUT"/link-cache.json)
+         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/11-diff.* "$OUT"/crawl "$OUT"/deep "$OUT"/link-cache.json)
   shopt -u nullglob
   for p in "${items[@]}"; do [ -e "$p" ] && found+=("$p"); done   # literal names survive nullglob
   [ ${#found[@]} -eq 0 ] && return 0
@@ -511,8 +511,15 @@ if have python3; then
   else rec "10-perf" failed "no Lighthouse scores (check lighthouse install / CHROME_PATH)"; fi
 else rec "10-perf" skipped "python3 not installed"; fi
 
+# ---------- 11. Run-to-run diff (audit as regression: only what changed since last run) ----------
+if have python3; then
+  if python3 "$HERE/diff-runs.py" "$OUT"; then
+    rec "11-diff" ok "$(jq -r 'if .has_baseline then "\(.changed|length) changed, \(.added|length) new, \(.removed|length) gone" else "no baseline (first run)" end' "$OUT/11-diff.json" 2>/dev/null)"
+  else rec "11-diff" failed "diff-runs.py error"; fi
+else rec "11-diff" skipped "python3 not installed"; fi
+
 rec "run-end" ok "finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 write_status; trap - EXIT
 echo "== Done. Artifacts in $OUT/ =="
 echo "Run status: $OUT/0-run-status.txt  (per-stage ok/failed/skipped)"
-echo "Stages: 0 crawl | 1 DNS | 2 TLS | 3 headers/tech | 4 urlscan | 5 screenshots | 6 deep QA | 7 SEO | 8 responsive | 9 a11y | 10 perf"
+echo "Stages: 0 crawl | 1 DNS | 2 TLS | 3 headers/tech | 4 urlscan | 4b over-fetch | 5 screenshots | 6 deep QA | 7 SEO | 8 responsive | 9 a11y | 10 perf | 11 diff"

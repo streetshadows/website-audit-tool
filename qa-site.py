@@ -43,19 +43,24 @@ PROBE = r"""
     const mn=Math.min(...ws),mx=Math.max(...ws);
     if(mx>0&&mn<mx*0.5&&mn<150) uneven.push({cls:(el.className||'').toString().split(' ')[0].slice(0,40),min:mn,max:mx});
   });
+  // items inside a horizontal scroller (overflow-x auto/scroll) are intentionally past the edge
+  const scrollerOf=el=>{for(let a=el.parentElement;a&&a!==document.body;a=a.parentElement){
+    const ox=getComputedStyle(a).overflowX;if((ox==='auto'||ox==='scroll')&&a.scrollWidth>a.clientWidth+1)return a;}return null;};
+  const hScrollers=new Set();
   const clipped=[];
   document.querySelectorAll('*').forEach(el=>{
     if(!vis(el))return; const cls=(el.className||'').toString();
     if(/skip|sr-only|visually-hidden|screen-reader/i.test(cls))return;
     const r=el.getBoundingClientRect();
     if(r.width<=vw&&(r.right>vw+2||(r.left<-2&&r.left>-300))){
+      const sc=scrollerOf(el); if(sc){hScrollers.add(sc);return;}
       if(![...el.children].some(c=>{const cr=c.getBoundingClientRect();return cr.width<=vw&&(cr.right>vw+2||cr.left<-2);}))
         clipped.push({tag:el.tagName.toLowerCase(),cls:cls.split(' ')[0].slice(0,40),txt:(el.innerText||'').trim().slice(0,24)});
     }
   });
   let nav=null; const nt=document.querySelector('.nav-toggle,[class*=hamburger],[class*=menu-toggle],button[aria-expanded]');
   if(nt&&vis(nt)){const r=nt.getBoundingClientRect();nav={w:Math.round(r.width),h:Math.round(r.height)};}
-  return {vw, scrollW:document.documentElement.scrollWidth, uneven, clipped:clipped.slice(0,15), nav};
+  return {vw, scrollW:document.documentElement.scrollWidth, uneven, clipped:clipped.slice(0,15), nav, h_scrollers:hScrollers.size};
 }
 """
 
@@ -106,6 +111,7 @@ def main():
                         "h_scroll": hs,
                         "crushed": d["uneven"],
                         "clipped": len(d["clipped"]),
+                        "h_scrollers": d["h_scrollers"],  # intentional overflow, excluded from "clipped"
                         "nav": d["nav"],
                     }
                     if hs:

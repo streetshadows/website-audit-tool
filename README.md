@@ -76,11 +76,35 @@ To install Claude Code itself for the AI-driven report step, see the
 ./run-audit.sh https://example.com          # artifacts land in ./audit/
 
 # tuning (all optional):
-MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.3 \
+MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.4 \
 SEO_MAX_PAGES=500 QA_MAX_PAGES=40 QA_VIEWPORTS="390,768,1440" \
-OUT_DIR=./audit/example.com \
+SEED_URLS="/pricing /app/dashboard" OUT_DIR=./audit/example.com \
   ./run-audit.sh https://example.com
+
+# second pass over other pages of the same host (host-level stages already covered):
+HOST_STAGES=0 SEED_URLS="/account /settings" OUT_DIR=./audit/example.com-pass2 \
+  ./run-audit.sh https://example.com/pricing
 ```
+
+#### Audit design settings (environment variables)
+
+Request pacing and page selection are part of the audit design, not performance tuning:
+agree them with the site owner, and they are recorded in `0-run-status.json`
+(`run-identity`).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DELAY` | `0.4` | Minimum seconds between requests to the **same host**, across the crawl, SEO fetches, link checks, image analysis and browser page loads. Other hosts aren't slowed. |
+| `AUDIT_UA` | `WebsiteAudit/1.0 (+repo URL)` | User-agent for every HTTP stage, so the owner can identify audit traffic. Browser stages keep Playwright's HeadlessChrome UA. Set a browser string only for a WAF that treats bots differently. |
+| `MAX_PAGES` / `MAX_DEPTH` | `150` / `4` | Crawl bounds. The target and `SEED_URLS` are always kept within the cap. |
+| `SEED_URLS` | — | Extra same-site pages (comma or space separated, absolute or `/path`). Needed for SPA client-side routes that a link crawl can't see. Every seed gets deep QA (stage 6). |
+| `QA_MAX_LINKS` | `300` | Link-check cap per stage. Links over the cap are listed as not checked, never dropped. Results are cached across stages for the run. |
+| `QA_DEEP_PAGES` | `3` | Pages given full deep QA: the target plus the next ones (seeds first). |
+| `SEO_RENDER_MAX` | `25` | SPA-shell pages re-measured from the rendered DOM in the SEO stage. |
+| `HOST_STAGES` | `1` | `0` skips DNS/RDAP/httpx, SSL Labs, nuclei and whatweb on a repeat pass over the same host (recorded as skipped). |
+| `SHOT_WIDTHS` | `390 768 1280 1440` | Stage 5 screenshot widths. |
+| `DNS_DOH` / `DOH_URL` | `1` / Cloudflare | DNS-over-HTTPS fallback when the local resolver can't be used (labelled "via DoH"). `0` disables it. |
+| `OUT_DIR` | `./audit` | Output directory (see below). |
 
 Read `audit/0-run-status.json` first — it records every stage as `ok / failed /
 skipped` (+ reason), so a degraded run is explicit rather than silent.
@@ -153,7 +177,10 @@ Keys are read from the environment, or auto-loaded from a **gitignored `.env`**
 (`cp .env.example .env` and fill it in — `.env` is never committed). Real env vars
 take precedence. On the web, set them as **environment variables / secrets in your
 environment configuration** instead of a file
-([docs](https://code.claude.com/docs/en/claude-code-on-the-web)). Preflight reports
+([docs](https://code.claude.com/docs/en/claude-code-on-the-web)). Where the environment
+settings offer a **network secrets** section, prefer it: plain environment variables are
+visible to anyone with access to that environment. The key is optional — without it,
+stage 4 uses a local browser capture. Preflight reports
 which keys are detected (never printing the value).
 
 - `URLSCAN_API_KEY` — enables the independent external reputation/render vantage

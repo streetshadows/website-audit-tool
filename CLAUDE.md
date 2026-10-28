@@ -72,6 +72,11 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 - **Formatting cannot drift.** Change `report_lib.py` + `REPORT-TEMPLATE.md` together,
   never one report in isolation. Reuse `badge/table/fig/sf/fix/callout`.
 - **Don't commit secrets.** Keys come from env / a gitignored `.env`.
+- **Pacing and caps are audit design.** `DELAY`, `MAX_PAGES`, `QA_MAX_LINKS`, `SEED_URLS`
+  and `HOST_STAGES` decide the load on someone else's site and what was covered. Choose them
+  deliberately, and report anything listed as not checked (cap) or skipped.
+- **Report, never apply.** The toolkit only observes. Don't change a target's
+  configuration, data or auth settings as part of an audit.
 
 ## Where things live
 
@@ -88,8 +93,10 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 ## Running on Claude Code on the web vs locally
 
 - **On the web:** the `.claude/hooks/session-start.sh` SessionStart hook installs every
-  prerequisite and self-tests at session start — nothing to install. Set
-  `URLSCAN_API_KEY` as an environment secret in the environment config (not a file).
+  prerequisite and self-tests at session start — nothing to install. `URLSCAN_API_KEY`
+  is optional; if used, set it in the environment config (prefer a network-secrets
+  section where offered — plain environment variables are visible to anyone with access
+  to the environment), never as a file.
 - **Local CLI:** ensure the prerequisites in `README.md` are installed; `run-audit.sh`
   self-tests in preflight and aborts if a core tool is missing.
 

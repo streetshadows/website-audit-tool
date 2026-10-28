@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-28 — Request conduct and SPA accuracy
+
+- **Paced, capped, deduplicated requests.** New `netutil.py`: one identifying user-agent
+  (`AUDIT_UA`), at least `DELAY` seconds between requests to the same host across every
+  HTTP stage and browser page load, and link checks that use HEAD with GET confirmation,
+  a cap (`QA_MAX_LINKS`, overflow reported) and a cross-stage cache. Run status records the
+  run's start and end time, UA and DELAY.
+- **Requested pages first.** `urls.txt` lists the target, then `SEED_URLS`, then the rest,
+  so the cap and the stage 6 deep QA never displace them. Each deep page has its own
+  status row. `SEED_URLS` covers SPA routes a link crawl can't find.
+- **Soft 404.** A random-path probe detects hosts that answer 200 for anything. They get the
+  `seo-soft-404` finding, and fallback pages are no longer counted as present well-known files.
+- **SPA shells.** Pages whose raw HTML is an empty app shell are re-measured from the
+  rendered DOM (H1, word count, alt), with `content_source` recorded. `<h1>` strings inside
+  inline scripts are no longer counted.
+- **Horizontal scrollers.** Items inside `overflow-x` scrollers are no longer reported as
+  edge-clipped; the scroller is listed once as informational.
+- **Options.** `HOST_STAGES=0` for repeat passes (recorded as skipped), `SHOT_WIDTHS`, and an
+  opt-out DNS-over-HTTPS fallback (`DNS_DOH`, `DOH_URL`) when the local resolver can't be used.
+
 ## 2026-10-28 — Correctness fixes: no stage reports OK without measuring
 
 - **Scripts are executable.** `run-audit.sh`, the SessionStart hook and the collectors

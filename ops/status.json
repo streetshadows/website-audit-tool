@@ -3,41 +3,13 @@
   "app": "Website Audit Toolkit",
   "repo": "streetshadows/website-audit-tool",
   "description": "Public, canonical home of the 11-stage website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
-  "lastUpdated": "2026-10-28T12:00:00.000Z",
-  "session": "2026-10-28 - [implement] P0 correctness fixes from field feedback (exec bits, Playwright/Chromium drift, axe under strict CSP, modern-colour contrast, DNS resolver-failure detection, RDAP split, OUT_DIR + previous-run rotation); status-file wording generalised. P1/P2 queued.",
+  "lastUpdated": "2026-10-28T23:00:00.000Z",
+  "session": "2026-10-28 - [implement] P1 field-feedback work: request pacing/UA/link-check policy, target-first ordering + SEED_URLS, soft-404 detection, SPA rendered-DOM fallback, scroller exemption, HOST_STAGES/SHOT_WIDTHS, DoH fallback. P2 queued.",
   "sprint": {
     "name": "Field-feedback hardening",
-    "focus": "Remove silent false-OK results first (P0, done), then request-rate conduct and SPA accuracy (P1), then new passive checks (P2)."
+    "focus": "P0 and P1 done. Next: new passive checks and report improvements (P2)."
   },
   "tasks": [
-    {
-      "id": "WAT-P1-LINKS",
-      "title": "Throttle, dedupe and cap link checks (HEAD with GET fallback, honour DELAY, QA_MAX_LINKS); one configurable AUDIT_UA",
-      "priority": "High",
-      "status": "pending",
-      "notes": "qa-check.py and seo-check.py currently send unthrottled GETs"
-    },
-    {
-      "id": "WAT-P1-DEEP",
-      "title": "Stage 6 deep pages: use the requested target and SEED_URLS, record each deep page in run status",
-      "priority": "Medium",
-      "status": "pending",
-      "notes": ""
-    },
-    {
-      "id": "WAT-P1-SPA",
-      "title": "SPA accuracy: soft-404 probe, rendered-DOM h1 fallback, overflow-x scroller exemption for edge-clipping",
-      "priority": "Medium",
-      "status": "pending",
-      "notes": ""
-    },
-    {
-      "id": "WAT-P1-OPTS",
-      "title": "HOST_STAGES=0 (recorded as skipped) and SHOT_WIDTHS options; DoH as a labelled DNS fallback",
-      "priority": "Low",
-      "status": "pending",
-      "notes": ""
-    },
     {
       "id": "WAT-P2-OVERFETCH",
       "title": "Anonymous API over-fetch stage (schema only, never values; mandatory public-page control)",
@@ -68,6 +40,38 @@
     }
   ],
   "completedTasks": [
+    {
+      "id": "WAT-P1-LINKS",
+      "title": "Throttle, dedupe and cap link checks (HEAD with GET fallback, honour DELAY, QA_MAX_LINKS); one configurable AUDIT_UA",
+      "priority": "High",
+      "status": "done",
+      "notes": "qa-check.py and seo-check.py currently send unthrottled GETs",
+      "completedDate": "2026-10-28"
+    },
+    {
+      "id": "WAT-P1-DEEP",
+      "title": "Stage 6 deep pages: use the requested target and SEED_URLS, record each deep page in run status",
+      "priority": "Medium",
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
+    },
+    {
+      "id": "WAT-P1-SPA",
+      "title": "SPA accuracy: soft-404 probe, rendered-DOM h1 fallback, overflow-x scroller exemption for edge-clipping",
+      "priority": "Medium",
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
+    },
+    {
+      "id": "WAT-P1-OPTS",
+      "title": "HOST_STAGES=0 (recorded as skipped) and SHOT_WIDTHS options; DoH as a labelled DNS fallback",
+      "priority": "Low",
+      "status": "done",
+      "notes": "",
+      "completedDate": "2026-10-28"
+    },
     {
       "id": "WAT-1028-P0",
       "title": "P0 field-feedback fixes: exec bits, Playwright drift fallback, axe bypass_csp + fail-loud, sRGB contrast, DNS failure detection, RDAP split, OUT_DIR + previous-run rotation",

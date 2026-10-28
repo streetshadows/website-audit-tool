@@ -7,12 +7,16 @@ large multi-page site (bounded by caps).
 ```bash
 ./run-audit.sh https://example.com
 # tuning (all optional):
-MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.3 \
+MAX_PAGES=500 MAX_DEPTH=5 DELAY=0.4 SEED_URLS="/app /pricing" \
 SEO_MAX_PAGES=500 QA_MAX_PAGES=40 QA_VIEWPORTS="390,768,1440" \
 OUT_DIR=./audit/example.com \
 URLSCAN_API_KEY=... PERF_STRATEGIES="mobile,desktop" \
   ./run-audit.sh https://example.com
 ```
+
+Every variable (pacing, user-agent, seeds, caps, `HOST_STAGES`, `SHOT_WIDTHS`, DoH
+fallback) is listed in the README under **Audit design settings**. Pacing (`DELAY`) and
+the caps are part of the audit design: they bound the load placed on a third-party site.
 
 ## Stages (artifacts written to `$OUT_DIR`, default ./audit/; the previous run is moved to `previous-run/`)
 

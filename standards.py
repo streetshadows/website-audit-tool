@@ -544,6 +544,24 @@ STANDARDS = {
         "camera, mic, geolocation, etc. Disable features you don't use.",
         "why_pass": "Powerful browser features are explicitly restricted to what the site needs.",
     },
+    "cors-wildcard": {
+        "title": "Access-Control-Allow-Origin: * (wildcard CORS)",
+        "standard": "WHATWG Fetch (CORS) + OWASP Secure Headers Project",
+        "url": "https://owasp.org/www-project-secure-headers/#access-control-allow-origin",
+        "frameworks": {
+            "WHATWG": "Fetch / CORS",
+            "OWASP": "Secure Headers / API Security",
+            "NIST CSF 2.0": "PR.DS",
+            "ISO 27001:2022": "A.8.26 Application security requirements",
+        },
+        "why_fail": "A wildcard Access-Control-Allow-Origin lets any website read the response "
+        "cross-origin. On a public, static, unauthenticated resource this is low risk (the content "
+        "is already public and browsers refuse to send credentials with a wildcard), but on any "
+        "endpoint that returns per-user or authenticated data it exposes that data to every origin. "
+        "Reflect an explicit allow-list of trusted origins instead of '*', especially on API routes.",
+        "why_pass": "CORS is restricted to known origins (or absent), so other sites cannot read "
+        "responses cross-origin.",
+    },
     # -------------------------------------------------------------- TLS ------
     "tls-version": {
         "title": "TLS protocol versions",

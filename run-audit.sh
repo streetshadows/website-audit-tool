@@ -352,7 +352,13 @@ fi  # end host-level stages 1-2
   echo "=== HTTPS headers ==="; curl -sIL -A "$UA" "$TARGET"
   echo "=== HTTP (redirect check) ==="; curl -sIL -A "$UA" "http://$domain"
 } | tee "$OUT/3-headers.txt"
-if grep -qiE "^HTTP/" "$OUT/3-headers.txt"; then rec "3-headers" ok "response headers captured"; else rec "3-headers" failed "no HTTP response (egress blocked?)"; fi
+if grep -qiE "^HTTP/" "$OUT/3-headers.txt"; then
+  # Flag a wildcard CORS header (informational): low risk on public static HTML, but it matters on
+  # API routes that return per-user data, so surface it for the report to assess by endpoint.
+  if grep -qiE "^access-control-allow-origin:\s*\*" "$OUT/3-headers.txt"; then
+    rec "3-headers" ok "response headers captured; NOTE access-control-allow-origin: * present (CORS wildcard — verify it is not on authenticated/API responses)"
+  else rec "3-headers" ok "response headers captured"; fi
+else rec "3-headers" failed "no HTTP response (egress blocked?)"; fi
 if host_off; then rec "3-nuclei" skipped "$HOST_SKIP"
 elif have nuclei; then
   # env -u GITHUB_TOKEN: nuclei's startup template/version check hits the GitHub API; an

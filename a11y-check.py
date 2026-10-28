@@ -97,7 +97,9 @@ def main():
     contrast_indeterminate = {}  # gradient/image bg — colour-only contrast invalid
     errors = []  # pages that failed to load/scan (flagged, not swallowed)
     with sync_playwright() as p:
-        b = p.chromium.launch(args=["--ignore-certificate-errors"])
+        b = p.chromium.launch(
+            args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
+        )
         for u in urls:
             ctx = b.new_context(viewport={"width": 1280, "height": 900}, ignore_https_errors=True)
             pg = ctx.new_page()

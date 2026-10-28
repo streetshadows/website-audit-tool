@@ -81,7 +81,9 @@ def main():
     os.makedirs(shotdir, exist_ok=True)
     pages = {}
     with sync_playwright() as p:
-        b = p.chromium.launch(args=["--ignore-certificate-errors"])
+        b = p.chromium.launch(
+            args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
+        )
         for u in urls:
             rec = {"viewports": {}, "issues": []}
             has_issue = False

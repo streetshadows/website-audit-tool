@@ -11,8 +11,44 @@ UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Ge
 echo "== Target: $TARGET  (domain: $domain) =="
 
 have(){ command -v "$1" >/dev/null 2>&1; }
-PYBROWSERS="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Playwright browser resolution. Each Python Playwright release expects one specific Chromium
+# revision; a preinstalled browser set (/opt/pw-browsers) drifts out of step as soon as pip
+# installs a newer Playwright, and every browser stage then fails to launch. Resolve by actually
+# launching: user-set PLAYWRIGHT_BROWSERS_PATH > /opt/pw-browsers > Playwright's own cache >
+# any Chromium under /opt/pw-browsers via PW_CHROMIUM_EXECUTABLE (the collectors pass it as
+# executable_path). Preflight records which one was used, so drift is never silent.
+PYBROWSERS="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
+PW_DETAIL=""
+pw_launch(){  # $1 = browsers path, $2 = optional explicit executable
+  PLAYWRIGHT_BROWSERS_PATH="$1" python3 - "${2:-}" >/dev/null 2>&1 <<'PY'
+import sys
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    p.chromium.launch(executable_path=sys.argv[1] or None).close()
+PY
+}
+resolve_browsers(){
+  local exe
+  if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
+    PYBROWSERS="$PLAYWRIGHT_BROWSERS_PATH"
+    pw_launch "$PYBROWSERS" && { PW_DETAIL="PLAYWRIGHT_BROWSERS_PATH=$PYBROWSERS (user-set)"; return 0; }
+  fi
+  for PYBROWSERS in /opt/pw-browsers "$HOME/.cache/ms-playwright"; do
+    pw_launch "$PYBROWSERS" && { PW_DETAIL="matching Chromium in $PYBROWSERS"; return 0; }
+  done
+  PYBROWSERS=/opt/pw-browsers
+  for exe in $(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -rV); do
+    if pw_launch "$PYBROWSERS" "$exe"; then
+      export PW_CHROMIUM_EXECUTABLE="$exe"
+      PW_DETAIL="version drift: Playwright's expected Chromium absent; using $exe"
+      return 0
+    fi
+  done
+  PW_DETAIL="no launchable Chromium for the installed Python Playwright"
+  return 1
+}
 
 # ProjectDiscovery's `httpx` shares its name with the popular Python `httpx` library,
 # whose pip console script can shadow the real binary on PATH (a common gotcha when
@@ -73,7 +109,11 @@ preflight(){
   if [ -n "$HTTPX" ]; then printf '  [ok]      httpx (ProjectDiscovery: %s)\n' "$HTTPX"
   elif have httpx; then printf '  [MISSING] httpx — found a non-ProjectDiscovery "httpx" (the Python library CLI) shadowing it on PATH\n'; missing_core+=("httpx")
   else printf '  [MISSING] httpx (core)\n'; missing_core+=("httpx"); fi
-  python3 -c 'import playwright' 2>/dev/null && printf '  [ok]      python:playwright\n' || { printf '  [MISSING] python:playwright (core)\n'; missing_core+=("playwright"); }
+  if python3 -c 'import playwright' 2>/dev/null; then
+    printf '  [ok]      python:playwright\n'
+    if resolve_browsers; then printf '  [ok]      chromium (%s)\n' "$PW_DETAIL"; rec "preflight-browser" ok "$PW_DETAIL"
+    else printf '  [MISSING] chromium — %s (core)\n' "$PW_DETAIL"; rec "preflight-browser" failed "$PW_DETAIL"; missing_core+=("chromium"); fi
+  else printf '  [MISSING] python:playwright (core)\n'; missing_core+=("playwright"); fi
   python3 -c 'import PIL' 2>/dev/null && printf '  [ok]      python:Pillow\n' || { printf '  [MISSING] python:Pillow (core)\n'; missing_core+=("Pillow"); }
   for t in $supp; do
     if have "$t"; then printf '  [ok]      %s\n' "$t"; else printf '  [warn]    %s (supplementary)\n' "$t"; missing_supp+=("$t"); fi
@@ -248,8 +288,8 @@ fi
 # Local browser capture (DOM + network map + cookies). Runs as the no-key
 # fallback above, and is always useful as an independent local record.
 if [ ! -s "$OUT/dom.html" ] && have python3 && python3 -c 'import playwright' 2>/dev/null; then
-  if PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}" \
-       python3 "$(dirname "$0")/capture-local.py" "$TARGET" "$OUT" | tee "$OUT/4-local-capture.txt"; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
+       python3 "$HERE/capture-local.py" "$TARGET" "$OUT" | tee "$OUT/4-local-capture.txt"; then
     rec "4-local-capture" ok "local DOM/network/cookies captured"
   else echo "local capture failed" | tee -a "$OUT/4-local-capture.txt"; rec "4-local-capture" failed "capture-local.py error"; fi
 fi

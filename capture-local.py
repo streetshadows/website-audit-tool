@@ -35,7 +35,9 @@ def main() -> int:
 
     requests: list[dict] = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--ignore-certificate-errors"])
+        browser = p.chromium.launch(
+            args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
+        )
         ctx = browser.new_context(ignore_https_errors=True)
         page = ctx.new_page()
 

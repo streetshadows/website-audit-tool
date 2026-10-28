@@ -13,6 +13,7 @@ status_table (§2 "show working"), sitemap (§3), techstack (§4), load, render_
 import base64
 import html as H
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -190,7 +191,7 @@ def render_pdf(html_doc, out_path):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = p.chromium.launch(executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None)
         pg = b.new_page()
         pg.set_content(html_doc, wait_until="load")
         pg.pdf(

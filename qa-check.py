@@ -299,7 +299,9 @@ def main():
         os.environ.pop(_v, None)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--ignore-certificate-errors"])
+        browser = p.chromium.launch(
+            args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
+        )
         for name, w in WIDTHS.items():
             ctx = browser.new_context(
                 viewport={"width": w, "height": 900}, ignore_https_errors=True, reduced_motion="reduce"

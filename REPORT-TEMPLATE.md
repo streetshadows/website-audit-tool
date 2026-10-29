@@ -21,7 +21,7 @@ never silently dropped.
 | H1 | 25pt, `#0b3d2e`. H2 | 15pt, `#0b3d2e`, 2px green underline, `page-break-after:avoid`. H3 | 11.5pt, `#13334f`. |
 | Mono / `code` | 8.8pt, light-grey background `#eef1f5`. |
 | **Italics** | **NEVER** for a paragraph or sentence. Italics are banned except inside verbatim quoted page copy. Emphasis uses **bold**. |
-| Page flow | Each top-level section (`h2`, §2 onward) starts on a new page via `page-break-before:always`; **§1 is the exception** — it shares the cover page (`h2:first-of-type` cancels the break) so the title page isn't left blank. `figure`, tables, `.sf`, callouts use `page-break-inside:avoid`. |
+| Page flow | Each top-level section (`h2`, §2 onward) starts on a new page via `page-break-before:always`; **§1 is the exception** — it shares the cover page (`h2:first-of-type` cancels the break) so the title page isn't left blank. `figure`, tables, `.sf`, callouts use `page-break-inside:avoid`. **Short reports / addenda:** call `document(..., flow=True)` to use continuous flow (`FLOW_CSS`) — sections run on instead of each taking a fresh page, so a one-page addendum isn't padded to many. Never hand-edit the page-break CSS in a single report. |
 
 ### Colour + badge taxonomy (fixed meanings)
 | Badge | Class | Meaning |
@@ -49,7 +49,7 @@ never silently dropped.
 | 2 | **Run status & coverage** ("show working") | A status table of EVERY stage: `ok / failed / skipped` + detail. Explicitly call out anything not fully measured (e.g. urlscan skipped = no API key; whois failed; PSI absent → perf timing indicative). | `0-run-status.json` |
 | 3 | Site map | A node diagram of all crawled URLs + count + indexability summary. | `crawl/urls.txt`, `5-seo.json` |
 | 4 | Technology stack | Wappalyzer-style table: Layer / Technology / Evidence. | `1-httpx.json`, headers, `dom.html`, local capture |
-| 5 | Security | 5.1 TLS (SSL Labs, note proxy caveat), 5.2 headers, 5.3 vulnerability scan (nuclei), **5.4 malware / external reputation (urlscan.io, with the scan screenshot)**. Each sub-finding: badge + fix + `.sf`. | `2-tls-*`, `3-headers.txt`, `3-nuclei.txt`, `4-*`, `urlscan.png` |
+| 5 | Security | 5.1 TLS (SSL Labs, note proxy caveat), 5.2 headers (incl. wildcard CORS note), 5.3 vulnerability scan (nuclei), **5.4 malware / external reputation (urlscan.io, with the scan screenshot)**, **5.5 anonymous over-fetch** (fields delivered to a logged-out visitor but not rendered; report field names/counts only, never values; note the control result). Each sub-finding: badge + fix + `.sf`. | `2-tls-*`, `3-headers.txt`, `3-nuclei.txt`, `4-*`, `4b-overfetch.json`, `urlscan.png` |
 | 6 | Responsive & UI | Functional bugs first, each with an **annotated/circled** screenshot. Tap targets. | `6-qa.json`, `7-qa-site.json`, screenshots |
 | 7 | Accessibility | axe summary; genuine contrast failures (annotated) vs **indeterminate** (gradient/image bg — flagged "visual check", NOT counted as fail). | `8-a11y.json` |
 | 8 | Performance | Category scores; structural findings (CLS, unsized images); timing marked indicative if local. | `9-perf.json` |
@@ -84,6 +84,16 @@ the shared components (badge/table/fig/sf/fix) so formatting cannot drift.
 7. **Thresholds that escalate to a visual/AI pass** (flagged in Section 2 and the
    relevant finding): any `contrast_indeterminate > 0`; any stage `failed`; any
    responsive horizontal-scroll bug; images displayed < 50% of natural size.
+8. **Rank by chain, not just by single-finding severity.** Two low findings can combine
+   into a high one (e.g. a public response that leaks an identifier + an endpoint that
+   trusts that identifier = account takeover). For each finding, note the precondition an
+   attacker needs (which identifier or role) and whether any public response leaks it; when
+   findings chain, rank the chain above its parts and state the chain in §1 and §11.
+9. **Name plan/tier limits in a fix.** When a recommended fix depends on the hosting or
+   service plan (a feature only on a paid tier, branch protection, a managed security
+   control), say so and give a plan-independent alternative (e.g. a database trigger in
+   place of a managed hook). The toolkit cannot detect the plan, so this is authoring
+   judgement, flagged in the `.fix` box.
 
 ---
 

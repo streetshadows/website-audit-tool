@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-10-28 — Passive API-exposure checks, report flow, regression diff
+
+- **Anonymous over-fetch check (stage 4b).** Records the JSON a logged-out visitor's own
+  browser already receives on the public pages and flags fields delivered but never
+  rendered (OWASP API3:2023). Read-only: no auth, no crafted requests, and only response
+  shape is stored (field names, counts, rendered y/n) — never values. A protected-route
+  result is marked inconclusive unless the public control pages produced data requests.
+  `OVERFETCH=0` disables it; `PROTECTED_URLS` adds logged-out checks of protected routes.
+- **Supabase public auth settings (opt-in).** With `BAAS_AUTH_SETTINGS=1`, reads a detected
+  project's public `/auth/v1/settings` and reports config flags only (signup open,
+  auto-confirm, providers) as conditions to verify. CAPTCHA enforcement is not inferred.
+- **Wildcard CORS note.** The headers stage flags `access-control-allow-origin: *`
+  (informational; matters on API routes returning per-user data).
+- **Report.** `report_lib.document(flow=True)` gives short reports and addenda continuous
+  flow instead of one page per section. REPORT-TEMPLATE adds chain-ranking and
+  plan/tier-limit authoring rules.
+- **Run-to-run diff (stage 11).** `diff-runs.py` compares key metrics against
+  `previous-run/` and reports only what changed, so a re-audit after a fix is a short diff.
+
+## 2026-10-28 — Request conduct and SPA accuracy
+
+- **Paced, capped, deduplicated requests.** New `netutil.py`: one identifying user-agent
+  (`AUDIT_UA`), at least `DELAY` seconds between requests to the same host across every
+  HTTP stage and browser page load, and link checks that use HEAD with GET confirmation,
+  a cap (`QA_MAX_LINKS`, overflow reported) and a cross-stage cache. Run status records the
+  run's start and end time, UA and DELAY.
+- **Requested pages first.** `urls.txt` lists the target, then `SEED_URLS`, then the rest,
+  so the cap and the stage 6 deep QA never displace them. Each deep page has its own
+  status row. `SEED_URLS` covers SPA routes a link crawl can't find.
+- **Soft 404.** A random-path probe detects hosts that answer 200 for anything. They get the
+  `seo-soft-404` finding, and fallback pages are no longer counted as present well-known files.
+- **SPA shells.** Pages whose raw HTML is an empty app shell are re-measured from the
+  rendered DOM (H1, word count, alt), with `content_source` recorded. `<h1>` strings inside
+  inline scripts are no longer counted.
+- **Horizontal scrollers.** Items inside `overflow-x` scrollers are no longer reported as
+  edge-clipped; the scroller is listed once as informational.
+- **Options.** `HOST_STAGES=0` for repeat passes (recorded as skipped), `SHOT_WIDTHS`, and an
+  opt-out DNS-over-HTTPS fallback (`DNS_DOH`, `DOH_URL`) when the local resolver can't be used.
+
+## 2026-10-28 — Correctness fixes: no stage reports OK without measuring
+
+- **Scripts are executable.** `run-audit.sh`, the SessionStart hook and the collectors
+  were committed without the exec bit, so the web hook and `./run-audit.sh` failed on a
+  fresh checkout.
+- **Playwright/Chromium drift.** The hook now installs the Python Playwright matching the
+  image's preinstalled browser (no hard pin); preflight launch-tests the browser and falls
+  back to a preinstalled Chromium (`PW_CHROMIUM_EXECUTABLE`), recorded as `preflight-browser`.
+- **Accessibility under a strict CSP.** axe-core is injected with `bypass_csp`; the stage
+  verifies axe loaded, reports `axe_pages_scanned`, and fails if axe ran on no page.
+- **Contrast on modern colour spaces.** `oklch()`/`lab()`/`color()` values are converted
+  to sRGB before scoring; unparseable colours are indeterminate, never failures.
+- **DNS resolver failure.** An unreachable or failing resolver now fails stage 1 instead
+  of producing a DNSSEC verdict from `dig` error text. RDAP domain and IP are recorded
+  separately.
+- **Stale artifacts.** `OUT_DIR` selects the output directory, and the previous run's
+  generated files are moved to `previous-run/` first, so a failed stage can't be scored
+  from the last run's output.
+
 ## 2026-07-24 — Public-release readiness
 
 Final cleanup before opening the repository publicly.

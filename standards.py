@@ -187,6 +187,18 @@ STANDARDS = {
         "link equity. Fix or remove broken links; 301 moved targets.",
         "why_pass": "Internal/external links resolve, preserving crawl budget, UX and link equity.",
     },
+    "seo-soft-404": {
+        "title": "Unknown URLs return 200 (soft 404)",
+        "standard": "RFC 9110 §15.5.5 404 Not Found + Google Search Central — soft 404 errors",
+        "url": "https://developers.google.com/search/docs/crawling-indexing/http-network-errors#soft-404-errors",
+        "frameworks": {"RFC 9110": "§15.5.5 (404 Not Found)", "Google Search Essentials": "Soft 404"},
+        "why_fail": "A path that cannot exist answered with a success status, so every mistyped or "
+        "removed URL looks like a real page: search engines report soft 404s and may index junk "
+        "URLs, monitoring and link checkers cannot see broken internal links, and scanners "
+        "misreport missing files as present. Return a real 404 for unknown routes (for an SPA, "
+        "a host-level 404 rule or a server-side route list).",
+        "why_pass": "Unknown paths return 404, so missing pages are visible to crawlers, users and monitoring.",
+    },
     "seo-mixed-content": {
         "title": "Mixed content (http on https)",
         "standard": "W3C Mixed Content + Google HTTPS-as-ranking-signal",
@@ -210,6 +222,22 @@ STANDARDS = {
         "will not appear in Google. Confirm each is intentional.",
         "why_pass": "Status 200, no noindex, not robots-blocked, self-canonical — the page "
         "is eligible for the Google index.",
+    },
+    "api-excessive-data": {
+        "title": "Backend returns fields the page never uses (excessive data exposure)",
+        "standard": "OWASP API Security Top 10 (2023) — API3:2023 Broken Object Property Level Authorization",
+        "url": "https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/",
+        "frameworks": {
+            "OWASP API": "API3:2023",
+            "OWASP ASVS": "V8 Data Protection",
+            "NIST CSF 2.0": "PR.DS-01 (data-at-rest / minimization)",
+        },
+        "why_fail": "A JSON response delivered to an anonymous visitor contained fields the page "
+        "never displays. Any logged-out visitor can read them in the network response even though "
+        "the UI hides them. Return only the fields each view needs (a database view or an explicit "
+        "select list), and enforce it server-side rather than relying on the client not to show them.",
+        "why_pass": "Anonymous responses carry only the fields the page renders — no hidden columns "
+        "reach a logged-out visitor.",
     },
     # -------------------------------------------------------- ACCESSIBILITY --
     # axe rule ids resolve to these via AXE_WCAG below; the most common are listed.
@@ -515,6 +543,24 @@ STANDARDS = {
         "why_fail": "Without a Permissions-Policy, embedded/third-party code may access "
         "camera, mic, geolocation, etc. Disable features you don't use.",
         "why_pass": "Powerful browser features are explicitly restricted to what the site needs.",
+    },
+    "cors-wildcard": {
+        "title": "Access-Control-Allow-Origin: * (wildcard CORS)",
+        "standard": "WHATWG Fetch (CORS) + OWASP Secure Headers Project",
+        "url": "https://owasp.org/www-project-secure-headers/#access-control-allow-origin",
+        "frameworks": {
+            "WHATWG": "Fetch / CORS",
+            "OWASP": "Secure Headers / API Security",
+            "NIST CSF 2.0": "PR.DS",
+            "ISO 27001:2022": "A.8.26 Application security requirements",
+        },
+        "why_fail": "A wildcard Access-Control-Allow-Origin lets any website read the response "
+        "cross-origin. On a public, static, unauthenticated resource this is low risk (the content "
+        "is already public and browsers refuse to send credentials with a wildcard), but on any "
+        "endpoint that returns per-user or authenticated data it exposes that data to every origin. "
+        "Reflect an explicit allow-list of trusted origins instead of '*', especially on API routes.",
+        "why_pass": "CORS is restricted to known origins (or absent), so other sites cannot read "
+        "responses cross-origin.",
     },
     # -------------------------------------------------------------- TLS ------
     "tls-version": {

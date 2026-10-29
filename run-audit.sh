@@ -6,13 +6,85 @@ set -uo pipefail
 
 TARGET="${1:-https://example.com}"
 domain=$(echo "$TARGET" | sed -E 's#^https?://##; s#/.*##')
-OUT="./audit"; mkdir -p "$OUT"
-UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+OUT="${OUT_DIR:-./audit}"; mkdir -p "$OUT"
+
+# Every stage writes to a fixed filename, and several stages read their own output back to
+# decide ok/failed (SSL Labs grade, dom.html, a11y/SEO counts). A file left by the previous run
+# would be read as this run's result — e.g. an SSL Labs timeout reported ok with the old grade.
+# So move the previous run's generated artifacts into $OUT/previous-run/ (replacing any older
+# copy). Only files this pipeline writes are moved; report-assets/ and anything else is untouched.
+rotate_previous_run(){
+  local prev="$OUT/previous-run" items p found=()
+  shopt -s nullglob
+  items=("$OUT"/0-run-status.* "$OUT"/1-dns.txt "$OUT"/1-httpx.json "$OUT"/1-rdap-*.json "$OUT"/1-whois.txt
+         "$OUT"/2-tls-ssllabs.* "$OUT"/3-headers.txt "$OUT"/3-nuclei.txt "$OUT"/3-whatweb.txt
+         "$OUT"/4-urlscan* "$OUT"/4b-overfetch.* "$OUT"/4-local-capture.* "$OUT"/urlscan.png "$OUT"/dom.html "$OUT"/shot-*.png
+         "$OUT"/5-seo.* "$OUT"/6-qa.* "$OUT"/qa-*.png "$OUT"/7-qa-site.* "$OUT"/qa-pages
+         "$OUT"/8-a11y.* "$OUT"/9-perf.* "$OUT"/11-diff.* "$OUT"/crawl "$OUT"/deep "$OUT"/link-cache.json)
+  shopt -u nullglob
+  for p in "${items[@]}"; do [ -e "$p" ] && found+=("$p"); done   # literal names survive nullglob
+  [ ${#found[@]} -eq 0 ] && return 0
+  rm -rf -- "$prev" && mkdir -p "$prev" && mv -- "${found[@]}" "$prev/" \
+    && echo "== Previous run's artifacts moved to $prev/ =="
+}
+rotate_previous_run
+# Request identity and pacing, shared with every Python collector via netutil.py. Part of the
+# audit design, not tuning: the default UA identifies the audit so the site owner can separate it
+# from real traffic (set AUDIT_UA to a browser string for a WAF that treats bots differently), and
+# DELAY is the minimum gap in seconds between requests to the same host across all HTTP stages.
+export AUDIT_UA="${AUDIT_UA:-Mozilla/5.0 (compatible; WebsiteAudit/1.0; +https://github.com/streetshadows/website-audit-tool)}"
+export DELAY="${DELAY:-0.4}"
+export LINK_CACHE="$OUT/link-cache.json"   # one cross-stage link-check cache per run
+# HOST_STAGES=0 skips the host-level stages (DNS/RDAP/httpx, SSL Labs, nuclei, whatweb) for repeat
+# runs against the same host, e.g. a second pass on other pages. Each is recorded as skipped.
+HOST_STAGES="${HOST_STAGES:-1}"
+case "$HOST_STAGES" in 0|1) ;; *) echo "HOST_STAGES must be 0 or 1 (got '$HOST_STAGES')"; exit 2;; esac
+host_off(){ [ "$HOST_STAGES" = "0" ]; }
+HOST_SKIP="HOST_STAGES=0 — host-level stage not run (repeat pass; see the earlier full run)"
+# Screenshot widths for stage 5 (space or comma separated).
+read -ra SHOT_W <<< "$(echo "${SHOT_WIDTHS:-390 768 1280 1440}" | tr ',' ' ')"
+UA="$AUDIT_UA"
 echo "== Target: $TARGET  (domain: $domain) =="
 
 have(){ command -v "$1" >/dev/null 2>&1; }
-PYBROWSERS="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Playwright browser resolution. Each Python Playwright release expects one specific Chromium
+# revision; a preinstalled browser set (/opt/pw-browsers) drifts out of step as soon as pip
+# installs a newer Playwright, and every browser stage then fails to launch. Resolve by actually
+# launching: user-set PLAYWRIGHT_BROWSERS_PATH > /opt/pw-browsers > Playwright's own cache >
+# any Chromium under /opt/pw-browsers via PW_CHROMIUM_EXECUTABLE (the collectors pass it as
+# executable_path). Preflight records which one was used, so drift is never silent.
+PYBROWSERS="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
+PW_DETAIL=""
+pw_launch(){  # $1 = browsers path, $2 = optional explicit executable
+  PLAYWRIGHT_BROWSERS_PATH="$1" python3 - "${2:-}" >/dev/null 2>&1 <<'PY'
+import sys
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    p.chromium.launch(executable_path=sys.argv[1] or None).close()
+PY
+}
+resolve_browsers(){
+  local exe
+  if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]; then
+    PYBROWSERS="$PLAYWRIGHT_BROWSERS_PATH"
+    pw_launch "$PYBROWSERS" && { PW_DETAIL="PLAYWRIGHT_BROWSERS_PATH=$PYBROWSERS (from environment)"; return 0; }
+  fi
+  for PYBROWSERS in /opt/pw-browsers "$HOME/.cache/ms-playwright"; do
+    pw_launch "$PYBROWSERS" && { PW_DETAIL="matching Chromium in $PYBROWSERS"; return 0; }
+  done
+  PYBROWSERS=/opt/pw-browsers
+  for exe in $(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -rV); do
+    if pw_launch "$PYBROWSERS" "$exe"; then
+      export PW_CHROMIUM_EXECUTABLE="$exe"
+      PW_DETAIL="version drift: Playwright's expected Chromium absent; using $exe"
+      return 0
+    fi
+  done
+  PW_DETAIL="no launchable Chromium for the installed Python Playwright"
+  return 1
+}
 
 # ProjectDiscovery's `httpx` shares its name with the popular Python `httpx` library,
 # whose pip console script can shadow the real binary on PATH (a common gotcha when
@@ -61,19 +133,29 @@ trap write_status EXIT   # write the manifest even if the script is interrupted
 # are printed and recorded so coverage is explicit from the first line of output.
 preflight(){
   echo "== Preflight: prerequisite self-test =="
+  printf '  [info]    request pacing: DELAY=%ss per host; MAX_PAGES=%s; QA_MAX_LINKS=%s\n' \
+    "$DELAY" "${MAX_PAGES:-150}" "${QA_MAX_LINKS:-300}"
+  printf '  [info]    user-agent (HTTP stages): %s\n' "$AUDIT_UA"
+  rec "run-identity" ok "started $(date -u +%Y-%m-%dT%H:%M:%SZ); UA=$AUDIT_UA; DELAY=${DELAY}s"
   local missing_core=() missing_supp=() t
   # name:kind  (core|supp)  — checker
   local core="python3 dig curl jq nuclei whatweb shot-scraper aspell node"
+  host_off && core="python3 curl jq shot-scraper aspell node"   # host-level tools not needed
   local supp="lighthouse pdftoppm convert"
   for t in $core; do
     if have "$t"; then printf '  [ok]      %s\n' "$t"; else printf '  [MISSING] %s (core)\n' "$t"; missing_core+=("$t"); fi
   done
   # httpx checked specifically: must be the ProjectDiscovery binary, not the Python lib
   # CLI of the same name (which would shadow it on PATH and break the fingerprint stage).
-  if [ -n "$HTTPX" ]; then printf '  [ok]      httpx (ProjectDiscovery: %s)\n' "$HTTPX"
+  if host_off; then printf '  [skip]    httpx/nuclei/whatweb/dig (HOST_STAGES=0)\n'
+  elif [ -n "$HTTPX" ]; then printf '  [ok]      httpx (ProjectDiscovery: %s)\n' "$HTTPX"
   elif have httpx; then printf '  [MISSING] httpx — found a non-ProjectDiscovery "httpx" (the Python library CLI) shadowing it on PATH\n'; missing_core+=("httpx")
   else printf '  [MISSING] httpx (core)\n'; missing_core+=("httpx"); fi
-  python3 -c 'import playwright' 2>/dev/null && printf '  [ok]      python:playwright\n' || { printf '  [MISSING] python:playwright (core)\n'; missing_core+=("playwright"); }
+  if python3 -c 'import playwright' 2>/dev/null; then
+    printf '  [ok]      python:playwright\n'
+    if resolve_browsers; then printf '  [ok]      chromium (%s)\n' "$PW_DETAIL"; rec "preflight-browser" ok "$PW_DETAIL"
+    else printf '  [MISSING] chromium — %s (core)\n' "$PW_DETAIL"; rec "preflight-browser" failed "$PW_DETAIL"; missing_core+=("chromium"); fi
+  else printf '  [MISSING] python:playwright (core)\n'; missing_core+=("playwright"); fi
   python3 -c 'import PIL' 2>/dev/null && printf '  [ok]      python:Pillow\n' || { printf '  [MISSING] python:Pillow (core)\n'; missing_core+=("Pillow"); }
   for t in $supp; do
     if have "$t"; then printf '  [ok]      %s\n' "$t"; else printf '  [warn]    %s (supplementary)\n' "$t"; missing_supp+=("$t"); fi
@@ -104,14 +186,62 @@ if have python3; then
   else rec "0-crawl" failed "crawl.py returned non-zero"; fi
 else rec "0-crawl" skipped "python3 not installed"; fi
 
+# ---------- 1-2. Host-level stages (skipped as a block when HOST_STAGES=0) ----------
+if host_off; then
+  for st in 1-dns 1-rdap-domain 1-rdap-ip 1-httpx 2-tls-ssllabs; do rec "$st" skipped "$HOST_SKIP"; done
+else
 # ---------- 1. DNS / infrastructure ----------
+# DNS-over-HTTPS fallback (DNS_DOH=0 disables): when the local resolver cannot be used (blocked
+# or filtered egress, missing dig), the same records come from a public DoH resolver over 443.
+# The result is labelled "via DoH" in run status: the vantage is that resolver, not the site's
+# users' resolvers, and the domain name is sent to it (see THIRD-PARTY-TOOLS.md).
+DOH_URL="${DOH_URL:-https://cloudflare-dns.com/dns-query}"
+dnssec_verdict(){
+  if   [ -z "$dnskey" ]; then echo "DNSSEC:off (unsigned)"
+  elif [ -z "$ds" ];     then echo "DNSSEC:partial (zone signed; no DS at parent — not anchored)"
+  else                        echo "DNSSEC:on"; fi
+}
+doh_raw(){ curl -sS --max-time 10 -A "$UA" -H 'accept: application/dns-json' "$DOH_URL?name=$1&type=$2" 2>/dev/null; }
+doh_q(){  # $1 name, $2 type -> answer data of that type only (CNAME hops dropped); non-zero on failure
+  local code r
+  case "$2" in A) code=1;; AAAA) code=28;; NS) code=2;; MX) code=15;; TXT) code=16;;
+               CAA) code=257;; SOA) code=6;; DNSKEY) code=48;; DS) code=43;; *) return 2;; esac
+  r="$(doh_raw "$1" "$2")" && printf '%s' "$r" | jq -e 'has("Status")' >/dev/null 2>&1 || return 1
+  printf '%s' "$r" | jq -r --argjson t "$code" '(.Answer // [])[] | select(.type == $t) | .data'
+}
+dns_via_doh(){  # fills 1-dns.txt, dnskey/ds and IP from DoH; sets doh_fail and returns 1 on failure
+  local st
+  st="$(doh_raw "$domain" SOA | jq -r '.Status // empty' 2>/dev/null)"
+  if [ -z "$st" ]; then doh_fail="DoH resolver unreachable ($DOH_URL)"; return 1; fi
+  if [ "$st" = "3" ]; then doh_fail="DoH also answers NXDOMAIN — the domain does not resolve"; return 1; fi
+  if [ "$st" != "0" ]; then doh_fail="DoH answered DNS rcode $st"; return 1; fi
+  dnskey="$(doh_q "$domain" DNSKEY)" && ds="$(doh_q "$domain" DS)" \
+    || { doh_fail="DoH DNSKEY/DS lookup failed"; return 1; }
+  {
+    echo "### SOURCE: DNS-over-HTTPS ($DOH_URL) — local resolver unusable: $dns_fail"
+    for t in A AAAA NS MX TXT; do echo "### $t"; doh_q "$domain" "$t"; done
+    echo "### SPF";   doh_q "$domain" TXT | grep -i spf
+    echo "### DMARC"; doh_q "_dmarc.$domain" TXT
+    echo "### CAA";   doh_q "$domain" CAA
+    echo "### SOA";   doh_q "$domain" SOA
+    echo "### DNSSEC"; echo "DNSKEY:"; printf '%s\n' "$dnskey"; echo "DS (parent):"; printf '%s\n' "$ds"
+  } | tee "$OUT/1-dns.txt"
+  IP="$(doh_q "$domain" A | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)"
+}
+
+dns_fail="" IP=""
 if have dig; then
   # DNSSEC is determined authoritatively by whether the zone is SIGNED (publishes a
   # DNSKEY) and ANCHORED at the parent (a DS record) — not by the AD "authenticated
   # data" flag, which is resolver-dependent (a non-validating resolver never sets it,
   # and it can also match spuriously), giving false positives/negatives.
-  dnskey="$(dig +short DNSKEY "$domain" 2>/dev/null)"
-  ds="$(dig +short DS "$domain" 2>/dev/null)"
+  # `dig +short` prints nothing both for "no such record" and for "no resolver reachable", so
+  # probe the resolver first (SOA, full output for the rcode) and check each DNSSEC lookup's exit
+  # code: an unreachable resolver must be a failed stage, never "DNSSEC:off".
+  soa_probe="$(dig +time=3 +tries=2 SOA "$domain" 2>&1)"; dig_rc=$?
+  dns_rcode="$(printf '%s\n' "$soa_probe" | sed -nE 's/.*status: ([A-Z]+).*/\1/p' | head -1)"
+  dnskey="$(dig +time=3 +tries=2 +short DNSKEY "$domain" 2>/dev/null)"; dnskey_rc=$?
+  ds="$(dig +time=3 +tries=2 +short DS "$domain" 2>/dev/null)"; ds_rc=$?
   {
     echo "### A";     dig +short A "$domain"
     echo "### AAAA";  dig +short AAAA "$domain"
@@ -124,18 +254,29 @@ if have dig; then
     echo "### SOA";   dig +short SOA "$domain"
     echo "### DNSSEC"; echo "DNSKEY:"; printf '%s\n' "$dnskey"; echo "DS (parent):"; printf '%s\n' "$ds"
   } | tee "$OUT/1-dns.txt"
-  if   [ -z "$dnskey" ]; then dnssec="DNSSEC:off (unsigned)"
-  elif [ -z "$ds" ];     then dnssec="DNSSEC:partial (zone signed; no DS at parent — not anchored)"
-  else                        dnssec="DNSSEC:on"; fi
-  mx=$(grep -A1 "### MX" "$OUT/1-dns.txt" | tail -1); [ -z "$mx" ] && mx="no-MX"
-  rec "1-dns" ok "dig OK; ${dnssec}"
-else rec "1-dns" skipped "dig (dnsutils) not installed"; fi
+  if [ "$dig_rc" -ne 0 ] || [ -z "$dns_rcode" ]; then dns_fail="resolver unreachable (dig exit $dig_rc)"
+  elif [ "$dns_rcode" != "NOERROR" ]; then dns_fail="resolver answered $dns_rcode for $domain"
+  elif [ "$dnskey_rc" -ne 0 ] || [ "$ds_rc" -ne 0 ]; then dns_fail="DNSKEY/DS lookup failed (exit $dnskey_rc/$ds_rc)"
+  else rec "1-dns" ok "dig OK; $(dnssec_verdict)"
+  fi
+  # dig +short prints resolver errors (";; communications error ...") on stdout: keep only an IPv4.
+  [ -z "$dns_fail" ] && IP=$(dig +time=3 +tries=2 +short A "$domain" 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1)
+else dns_fail="dig (dnsutils) not installed"; fi
+if [ -n "$dns_fail" ]; then
+  if [ "${DNS_DOH:-1}" = "0" ]; then
+    rec "1-dns" failed "$dns_fail — no DNS data; DNSSEC not determined (DoH fallback disabled: DNS_DOH=0)"
+  elif dns_via_doh; then
+    rec "1-dns" ok "via DoH ($DOH_URL) — local $dns_fail; resolver vantage differs; $(dnssec_verdict)"
+  else
+    rec "1-dns" failed "$dns_fail; DoH fallback: $doh_fail — DNS records and DNSSEC not determined"
+  fi
+fi
 
 # 1b. Registration data via RDAP over HTTPS (port 443) — the IETF replacement for
 # port-43 whois (RFC 7480-7484). Works where whois/43 is firewalled. rdap.org is the
 # IANA-backed bootstrap that redirects to the authoritative registry/RIR. We query
 # both the DOMAIN (registrar, dates, status, nameservers) and the IP (network/org).
-IP=$(dig +short A "$domain" 2>/dev/null | head -1)
+# dig +short prints resolver errors (";; communications error ...") on stdout: keep only an IPv4.
 rdap_dom="$OUT/1-rdap-domain.json"; rdap_ip="$OUT/1-rdap-ip.json"
 curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/domain/$domain" -o "$rdap_dom" || true
 [ -n "$IP" ] && curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://rdap.org/ip/$IP" -o "$rdap_ip" || true
@@ -156,14 +297,18 @@ curl -sS -L --max-time 30 -A "$UA" -H 'Accept: application/rdap+json' "https://r
            (.entities[]? | "org: \((.roles // []) | join("/")) = \(.vcardArray[1]? | map(select(.[0]=="fn"))[0][3] // .handle // "?")")' "$rdap_ip"
   else echo "(IP RDAP unavailable)"; fi
 } | tee "$OUT/1-whois.txt"
-# fallback to classic whois only if RDAP gave nothing and port 43 happens to be open
-if ! grep -qE "handle:|network:" "$OUT/1-whois.txt"; then
-  if have whois && timeout 20 whois "$IP" 2>&1 | grep -iE "netname|org|country|inetnum|netrange|origin" >> "$OUT/1-whois.txt"; then
-    rec "1-rdap" ok "RDAP empty; classic whois/43 fallback succeeded"
-  else rec "1-rdap" failed "RDAP returned no data and whois/43 unavailable"; fi
-else
-  rec "1-rdap" ok "registration data via RDAP/HTTPS (domain + IP)"
-fi
+# Domain and IP registration are recorded separately: one succeeding must not mask the other.
+if have jq && jq -e .objectClassName "$rdap_dom" >/dev/null 2>&1; then
+  rec "1-rdap-domain" ok "domain registration via RDAP/HTTPS"
+else rec "1-rdap-domain" failed "domain RDAP returned no data (registrar/dates/status unknown)"; fi
+if [ -z "$IP" ]; then
+  rec "1-rdap-ip" skipped "no A record resolved — IP registration not looked up"
+elif have jq && jq -e .objectClassName "$rdap_ip" >/dev/null 2>&1; then
+  rec "1-rdap-ip" ok "IP network registration via RDAP/HTTPS"
+# fallback to classic whois only if IP RDAP gave nothing and port 43 happens to be open
+elif have whois && timeout 20 whois "$IP" 2>&1 | grep -iE "netname|org|country|inetnum|netrange|origin" >> "$OUT/1-whois.txt"; then
+  rec "1-rdap-ip" ok "IP RDAP empty; classic whois/43 fallback succeeded"
+else rec "1-rdap-ip" failed "IP RDAP returned no data and whois/43 unavailable"; fi
 if [ -n "$HTTPX" ]; then
   if "$HTTPX" -u "$TARGET" -title -status-code -server -tech-detect -tls-grab -json -o "$OUT/1-httpx.json" -silent \
      && [ -s "$OUT/1-httpx.json" ]; then
@@ -196,18 +341,26 @@ if have jq && [ -s "$OUT/2-tls-ssllabs.json" ]; then
     jq -r '.certs[0]? | "cert: \(.subject) | issuer \(.issuerSubject) | \(.keyAlg) \(.keySize) \(.sigAlg)"' "$OUT/2-tls-ssllabs.json"
   } 2>/dev/null | tee "$OUT/2-tls-ssllabs.txt"
 fi
-sl_st=$(jq -r '.status // "no-response"' "$OUT/2-tls-ssllabs.json" 2>/dev/null)
+sl_st=$(jq -r '.status // "no-response"' "$OUT/2-tls-ssllabs.json" 2>/dev/null); sl_st="${sl_st:-no-response}"
 if [ "$sl_st" = "READY" ]; then
   rec "2-tls-ssllabs" ok "grade $(jq -r '[.endpoints[]?.grade]|unique|join("/")' "$OUT/2-tls-ssllabs.json" 2>/dev/null)"
 else rec "2-tls-ssllabs" failed "did not complete (status=$sl_st)"; fi
+fi  # end host-level stages 1-2
 
 # ---------- 3. Headers + misconfig + tech ----------
 {
   echo "=== HTTPS headers ==="; curl -sIL -A "$UA" "$TARGET"
   echo "=== HTTP (redirect check) ==="; curl -sIL -A "$UA" "http://$domain"
 } | tee "$OUT/3-headers.txt"
-if grep -qiE "^HTTP/" "$OUT/3-headers.txt"; then rec "3-headers" ok "response headers captured"; else rec "3-headers" failed "no HTTP response (egress blocked?)"; fi
-if have nuclei; then
+if grep -qiE "^HTTP/" "$OUT/3-headers.txt"; then
+  # Flag a wildcard CORS header (informational): low risk on public static HTML, but it matters on
+  # API routes that return per-user data, so surface it for the report to assess by endpoint.
+  if grep -qiE "^access-control-allow-origin:\s*\*" "$OUT/3-headers.txt"; then
+    rec "3-headers" ok "response headers captured; NOTE access-control-allow-origin: * present (CORS wildcard — verify it is not on authenticated/API responses)"
+  else rec "3-headers" ok "response headers captured"; fi
+else rec "3-headers" failed "no HTTP response (egress blocked?)"; fi
+if host_off; then rec "3-nuclei" skipped "$HOST_SKIP"
+elif have nuclei; then
   # env -u GITHUB_TOKEN: nuclei's startup template/version check hits the GitHub API; an
   # unrelated GITHUB_TOKEN in the environment makes it 401 and abort. Templates are provisioned
   # by the session-start hook (see .claude/hooks/session-start.sh).
@@ -216,7 +369,8 @@ if have nuclei; then
     rec "3-nuclei" ok "$(wc -l < "$OUT/3-nuclei.txt" | tr -d ' ') finding(s)"
   else rec "3-nuclei" failed "nuclei returned non-zero (templates missing? run: nuclei -update-templates)"; fi
 else rec "3-nuclei" skipped "nuclei not installed"; fi
-if have whatweb; then
+if host_off; then rec "3-whatweb" skipped "$HOST_SKIP"
+elif have whatweb; then
   RUBYLIB="${RUBYLIB:-/usr/lib/ruby/vendor_ruby}" whatweb "$TARGET" | tee "$OUT/3-whatweb.txt" && rec "3-whatweb" ok "tech fingerprint captured"
 else rec "3-whatweb" skipped "whatweb not installed (tech stack inferred from httpx + DOM)"; fi
 
@@ -248,11 +402,21 @@ fi
 # Local browser capture (DOM + network map + cookies). Runs as the no-key
 # fallback above, and is always useful as an independent local record.
 if [ ! -s "$OUT/dom.html" ] && have python3 && python3 -c 'import playwright' 2>/dev/null; then
-  if PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}" \
-       python3 "$(dirname "$0")/capture-local.py" "$TARGET" "$OUT" | tee "$OUT/4-local-capture.txt"; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
+       python3 "$HERE/capture-local.py" "$TARGET" "$OUT" | tee "$OUT/4-local-capture.txt"; then
     rec "4-local-capture" ok "local DOM/network/cookies captured"
   else echo "local capture failed" | tee -a "$OUT/4-local-capture.txt"; rec "4-local-capture" failed "capture-local.py error"; fi
 fi
+
+# ---------- 4b. Anonymous over-fetch (passive; logged-out response shape) ----------
+# Records the JSON a logged-out visitor's own browser already receives on the public pages and
+# compares delivered fields with rendered fields. Read-only: no auth, no crafted requests, no
+# stored values. OVERFETCH=0 disables; PROTECTED_URLS adds logged-out checks of protected routes.
+if [ "${OVERFETCH:-1}" = "1" ] && have python3 && python3 -c 'import playwright' 2>/dev/null; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/overfetch-check.py" "$OUT"; then
+    rec "4b-overfetch" ok "$(jq -r '"\(.over_fetch|length) delivered-not-rendered endpoint(s); control_ok=\(.control_ok)"' "$OUT/4b-overfetch.json" 2>/dev/null)"
+  else rec "4b-overfetch" failed "overfetch-check.py error"; fi
+else rec "4b-overfetch" skipped "OVERFETCH=0 or python3/playwright not available"; fi
 
 # ---------- 5. Responsive screenshots (for UI / CSS review) ----------
 # Notes:
@@ -263,46 +427,56 @@ fi
 #    NOT scroll each section into view, so those sections render BLANK unless we
 #    force them visible. --reduced-motion triggers prefers-reduced-motion
 #    fallbacks; the JS handles common reveal patterns (.reveal/.in-view, AOS).
-# Widths: 390 mobile, 768 tablet, 1280 laptop, 1440 desktop.
+# Widths: SHOT_WIDTHS, default 390 mobile, 768 tablet, 1280 laptop, 1440 desktop.
 REVEAL_JS="document.querySelectorAll('[class*=reveal],[data-aos]').forEach(function(e){e.classList.add('in-view','aos-animate','visible');e.style.opacity=1;e.style.transform='none';});"
 if have shot-scraper; then
   ok5=0
-  for w in 390 768 1280 1440; do
+  for w in "${SHOT_W[@]}"; do
     # env -u *_PROXY: shot-scraper's Chromium mis-handles the TLS-intercepting egress proxy and
     # RSTs HTTPS. Open outbound is required (see header); --ignore-certificate-errors covers the
     # transparent interception. The Python collectors clear the same vars internally.
-    env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+    # PLAYWRIGHT_BROWSERS_PATH: use the browser set preflight resolved, not Playwright's default cache.
+    env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
       shot-scraper "$TARGET" -w "$w" -o "$OUT/shot-$w.png" \
       --browser-arg --ignore-certificate-errors --reduced-motion -j "$REVEAL_JS" --wait 1800 \
       && { echo "shot-$w.png ok"; ok5=$((ok5+1)); }
   done
-  if [ "$ok5" -eq 4 ]; then rec "5-screenshots" ok "4/4 viewports"; else rec "5-screenshots" failed "$ok5/4 viewports captured"; fi
+  if [ "$ok5" -eq "${#SHOT_W[@]}" ]; then rec "5-screenshots" ok "$ok5/${#SHOT_W[@]} viewports (${SHOT_W[*]})"
+  else rec "5-screenshots" failed "$ok5/${#SHOT_W[@]} viewports captured (${SHOT_W[*]})"; fi
 else echo "shot-scraper not installed — skipping screenshots"; rec "5-screenshots" skipped "shot-scraper not installed"; fi
 
 # ---------- 6. Website QA: UI / images / spelling / responsive (deep, per page) ----------
-# Deep template/asset review. Runs on the homepage (-> $OUT, used by the report) and,
-# if QA_DEEP_PAGES>1, on the next pages from the crawl into $OUT/deep/<slug>/.
+# Deep template/asset review. Runs on the target (-> $OUT, used by the report) and on the next
+# QA_DEEP_PAGES-1 pages of crawl/urls.txt into $OUT/deep/<slug>/. urls.txt lists the target first,
+# then SEED_URLS, then the rest sorted, so requested pages are reviewed first; every seed is
+# reviewed even if QA_DEEP_PAGES is smaller. Each deep page gets its own run-status row.
 if have python3 && python3 -c 'import playwright' 2>/dev/null; then
   have aspell || echo "(aspell not installed — spelling check will be skipped: apt install aspell aspell-en)"
   if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/qa-check.py" "$TARGET" "$OUT"; then
-    rec "6-qa" ok "deep UI/image/spelling QA (homepage)"
-  else rec "6-qa" failed "qa-check.py error"; fi
+    rec "6-qa" ok "deep UI/image/spelling QA: $TARGET"
+  else rec "6-qa" failed "qa-check.py error on $TARGET"; fi
+  n_seeds=$(jq -r '.seed_urls | length' "$OUT/crawl/discovery.json" 2>/dev/null || echo 0)
   QA_DEEP_PAGES="${QA_DEEP_PAGES:-3}"
+  [ "$QA_DEEP_PAGES" -lt $((n_seeds+1)) ] && QA_DEEP_PAGES=$((n_seeds+1))
   if [ -f "$OUT/crawl/urls.txt" ] && [ "$QA_DEEP_PAGES" -gt 1 ]; then
-    tail -n +2 "$OUT/crawl/urls.txt" | head -n $((QA_DEEP_PAGES-1)) | while read -r purl; do
+    # mapfile, not `| while`: a pipe would run the loop in a subshell and lose its rec() rows.
+    mapfile -t deep_urls < <(tail -n +2 "$OUT/crawl/urls.txt" | head -n $((QA_DEEP_PAGES-1)))
+    n=0
+    for purl in "${deep_urls[@]}"; do
       [ -z "$purl" ] && continue
+      n=$((n+1))
       slug=$(echo "$purl" | sed -E 's#^https?://##; s#[^a-zA-Z0-9]+#_#g' | cut -c1-50)
       mkdir -p "$OUT/deep/$slug"
-      PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" \
-        python3 "$HERE/qa-check.py" "$purl" "$OUT/deep/$slug" >/dev/null 2>&1 \
-        && echo "deep QA: $purl -> deep/$slug/" || echo "deep QA failed: $purl"
+      if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/qa-check.py" "$purl" "$OUT/deep/$slug" >/dev/null 2>&1
+      then rec "6-qa-deep-$n" ok "$purl -> deep/$slug/"
+      else rec "6-qa-deep-$n" failed "qa-check.py error on $purl"; fi
     done
   fi
 else echo "python3/playwright missing — skipping QA section"; rec "6-qa" skipped "python3/playwright not available"; fi
 
 # ---------- 7. SEO / metadata / links across ALL discovered pages ----------
 if have python3; then
-  if python3 "$HERE/seo-check.py" "$OUT"; then
+  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/seo-check.py" "$OUT"; then
     rec "7-seo" ok "$(jq -r '.pages_checked // "?"' "$OUT/5-seo.json" 2>/dev/null) pages checked"
   else rec "7-seo" failed "seo-check.py error"; fi
 else rec "7-seo" skipped "python3 not installed"; fi
@@ -316,8 +490,10 @@ else rec "8-qa-site" skipped "python3/playwright not available"; fi
 
 # ---------- 9. Accessibility (axe-core + independent contrast cross-check) ----------
 if have python3 && python3 -c 'import playwright' 2>/dev/null; then
-  if PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/a11y-check.py" "$OUT"; then
-    rec "9-a11y" ok "$(jq -r '.contrast_summary.genuine_failures // "?"' "$OUT/8-a11y.json" 2>/dev/null) genuine contrast fails; $(jq -r '.contrast_summary.indeterminate_gradient_or_image // 0' "$OUT/8-a11y.json" 2>/dev/null) indeterminate"
+  PLAYWRIGHT_BROWSERS_PATH="$PYBROWSERS" python3 "$HERE/a11y-check.py" "$OUT"; rc=$?
+  a11y_counts="$(jq -r '"axe ran on \(.axe_pages_scanned // "?")/\(.pages_checked // "?") pages; \(.contrast_summary.genuine_failures // "?") genuine contrast fails; \(.contrast_summary.indeterminate_gradient_or_image // 0) indeterminate"' "$OUT/8-a11y.json" 2>/dev/null)"
+  if   [ "$rc" -eq 0 ]; then rec "9-a11y" ok "$a11y_counts"
+  elif [ "$rc" -eq 3 ]; then rec "9-a11y" failed "axe-core did not run on any page (contrast cross-check only): $a11y_counts"
   else rec "9-a11y" failed "a11y-check.py error"; fi
 else rec "9-a11y" skipped "python3/playwright not available"; fi
 
@@ -335,7 +511,18 @@ if have python3; then
   else rec "10-perf" failed "no Lighthouse scores (check lighthouse install / CHROME_PATH)"; fi
 else rec "10-perf" skipped "python3 not installed"; fi
 
+# ---------- 11. Run-to-run diff (audit as regression: only what changed since last run) ----------
+# Flush the status collected so far to disk: it is otherwise only written on EXIT, and the diff
+# compares this run's 0-run-status.json against previous-run/. (11-diff/run-end land on EXIT.)
+write_status
+if have python3; then
+  if python3 "$HERE/diff-runs.py" "$OUT"; then
+    rec "11-diff" ok "$(jq -r 'if .has_baseline then "\(.changed|length) changed, \(.added|length) new, \(.removed|length) gone" else "no baseline (first run)" end' "$OUT/11-diff.json" 2>/dev/null)"
+  else rec "11-diff" failed "diff-runs.py error"; fi
+else rec "11-diff" skipped "python3 not installed"; fi
+
+rec "run-end" ok "finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 write_status; trap - EXIT
 echo "== Done. Artifacts in $OUT/ =="
 echo "Run status: $OUT/0-run-status.txt  (per-stage ok/failed/skipped)"
-echo "Stages: 0 crawl | 1 DNS | 2 TLS | 3 headers/tech | 4 urlscan | 5 screenshots | 6 deep QA | 7 SEO | 8 responsive | 9 a11y | 10 perf"
+echo "Stages: 0 crawl | 1 DNS | 2 TLS | 3 headers/tech | 4 urlscan | 4b over-fetch | 5 screenshots | 6 deep QA | 7 SEO | 8 responsive | 9 a11y | 10 perf | 11 diff"

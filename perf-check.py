@@ -61,7 +61,7 @@ def _default_chrome():
 
 
 def run_local_lh(url, form):
-    chrome = os.environ.get("CHROME_PATH") or _default_chrome()
+    chrome = os.environ.get("CHROME_PATH") or os.environ.get("PW_CHROMIUM_EXECUTABLE") or _default_chrome()
     cmd = [
         "lighthouse",
         url,

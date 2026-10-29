@@ -14,7 +14,8 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 ## The two halves of the job
 
 1. **Collection (deterministic, the script does it).** `./run-audit.sh https://site`
-   runs 11 stages and writes machine-readable artifacts to `./audit/`. You do not
+   runs the collection stages and writes machine-readable artifacts to `$OUT_DIR`
+   (default `./audit/`). You do not
    hand-edit these.
 2. **Reporting (judgement, you do it).** You read the artifacts + screenshots,
    annotate the evidence, and compose a per-site `build_report.py` that imports the
@@ -72,13 +73,19 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 - **Formatting cannot drift.** Change `report_lib.py` + `REPORT-TEMPLATE.md` together,
   never one report in isolation. Reuse `badge/table/fig/sf/fix/callout`.
 - **Don't commit secrets.** Keys come from env / a gitignored `.env`.
+- **Pacing and caps are audit design.** `DELAY`, `MAX_PAGES`, `QA_MAX_LINKS`, `SEED_URLS`
+  and `HOST_STAGES` decide the load on someone else's site and what was covered. Choose them
+  deliberately, and report anything listed as not checked (cap) or skipped.
+- **Report, never apply.** The toolkit only observes. Don't change a target's
+  configuration, data or auth settings as part of an audit.
 
 ## Where things live
 
 | Path | Purpose |
 |---|---|
-| `run-audit.sh` | Orchestrates the 11 collection stages → `./audit/` |
-| `crawl.py` `seo-check.py` `a11y-check.py` `perf-check.py` `qa-*.py` `capture-local.py` | Per-stage collectors |
+| `run-audit.sh` | Orchestrates the collection stages → `$OUT_DIR` (default `./audit/`) |
+| `crawl.py` `seo-check.py` `a11y-check.py` `perf-check.py` `qa-*.py` `capture-local.py` `overfetch-check.py` `diff-runs.py` | Per-stage collectors |
+| `netutil.py` | Shared request policy: `AUDIT_UA`, per-host pacing, link checking |
 | `report_lib.py` | Shared report components + CSS (single source of truth for look) |
 | `REPORT-TEMPLATE.md` | The formatting contract the report MUST follow |
 | `standards.py` | Citations KB — every finding maps to a standard + governance framework |
@@ -88,17 +95,18 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 ## Running on Claude Code on the web vs locally
 
 - **On the web:** the `.claude/hooks/session-start.sh` SessionStart hook installs every
-  prerequisite and self-tests at session start — nothing to install. Set
-  `URLSCAN_API_KEY` as an environment secret in the environment config (not a file).
+  prerequisite and self-tests at session start — nothing to install. `URLSCAN_API_KEY`
+  is optional; if used, set it in the environment config (prefer a network-secrets
+  section where offered — plain environment variables are visible to anyone with access
+  to the environment), never as a file.
 - **Local CLI:** ensure the prerequisites in `README.md` are installed; `run-audit.sh`
   self-tests in preflight and aborts if a core tool is missing.
 
-## Ops portal status file (`ops/status.json`)
+## Status file (`ops/status.json`)
 
-The MakeMagic ops portal (`streetshadows/cooldeals`, `apps/ops-portal`) shows this repo on its own page by
-mirroring `ops/status.json` every 2 hours (`.github/workflows/ops-status-mirror.yml` there, read-only PAT).
+An external status dashboard mirrors `ops/status.json` read-only on a schedule.
 Shape: `schemaVersion`, `app`, `description`, `lastUpdated`, `session`, `sprint{name,focus}`, `tasks[]`
 (AI work: `id`, `title`, `priority` Critical/High/Medium/Low, `status` pending/in_progress/blocked/done, `notes`),
 `completedTasks[]` (same + `completedDate`), `humanActions[]` (`item`, `priority`, `linkedTask`, `dueDate`, `notes`),
 `health{}`. **Update it at the end of every session that changes task state** — open a task, close one, add or
-clear a human action — before the final commit. It is the only thing the portal sees. Seeded 2026-09-22.
+clear a human action — before the final commit. It is the only thing the dashboard sees. Seeded 2026-09-22.

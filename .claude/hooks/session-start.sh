@@ -25,9 +25,27 @@ sudo apt-get install -y --no-install-recommends \
   || sudo apt-get install -y dnsutils whois jq curl aspell aspell-en poppler-utils imagemagick whatweb bsdextrautils
 
 # --- Python QA stack (Stages 5-10) ---
-pip install --no-input playwright shot-scraper Pillow
-playwright install --with-deps chromium
-shot-scraper install
+# The cloud image preinstalls Chromium in /opt/pw-browsers for its global Node Playwright. An
+# unpinned pip install pulls a newer Python Playwright that expects a different Chromium revision,
+# so no browser stage can launch. Match the Python package to that Node version when present
+# (tracks the image instead of a hard pin, which would go stale); otherwise take the latest.
+PW_SPEC="playwright"
+if [ -d /opt/pw-browsers ] && command -v npm >/dev/null 2>&1; then
+  node_pw="$(node -p "require('$(npm root -g)/playwright/package.json').version" 2>/dev/null || true)"
+  [ -n "$node_pw" ] && PW_SPEC="playwright==${node_pw}"
+fi
+echo "session-start: installing ${PW_SPEC}"
+pip install --no-input "$PW_SPEC" shot-scraper Pillow \
+  || pip install --no-input playwright shot-scraper Pillow
+if [ -d /opt/pw-browsers ]; then
+  export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+  [ -n "${CLAUDE_ENV_FILE:-}" ] && echo "export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers" >> "$CLAUDE_ENV_FILE"
+fi
+# A no-op when the matching revision is already present. If the download is blocked, run-audit.sh
+# preflight falls back to any preinstalled Chromium (PW_CHROMIUM_EXECUTABLE) and records it.
+playwright install --with-deps chromium \
+  || echo "session-start: WARN playwright browser install failed (preflight will try a preinstalled Chromium)"
+shot-scraper install || echo "session-start: WARN shot-scraper browser install failed"
 
 # --- Scanners (Stage 1/3 + perf): install all so nothing is silently absent ---
 GOBIN_DIR="$(go env GOPATH)/bin"

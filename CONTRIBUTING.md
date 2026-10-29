@@ -98,8 +98,8 @@ before going public:
 
 1. Open an issue describing the change (bug, new check, doc fix) before large PRs.
 2. Keep PRs focused; explain **what was measured** and **why** for any new finding type.
-3. For a new collector stage: write artifacts to `./audit/`, record `ok/failed/skipped`
-   in `0-run-status.json`, and degrade gracefully if an optional tool is missing.
+3. For a new collector stage: write artifacts to `$OUT_DIR` (default `./audit/`), record
+   `ok/failed/skipped` in `0-run-status.json`, and degrade gracefully if an optional tool is missing.
 4. Match the surrounding code style; no new heavyweight dependencies without discussion.
 
 ## Licensing of contributions

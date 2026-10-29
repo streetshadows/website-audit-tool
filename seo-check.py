@@ -3,9 +3,10 @@
 
 Reads <out>/crawl/urls.txt and, for every page, extracts SEO-critical signals from
 the server-rendered HTML, then reports per-page issues, cross-page duplicates, and
-site-wide broken links. Raw-HTML fetch (fast, reliable) — note that fully
-client-rendered SPAs may need the JS-rendered DOM for body content (head tags are
-almost always server-rendered).
+site-wide broken links. Raw-HTML fetch (fast, reliable). Pages whose raw HTML is an
+unrendered SPA shell (no <h1>, almost no text, a module script or empty root div) are
+re-measured in a headless browser for the body signals (H1 count, word count, img alt);
+each page records content_source raw|rendered so the report can say which view was used.
 
 Per page: status, <title>, meta description, canonical, meta-robots (noindex),
 H1 count, html lang, viewport meta, Open Graph, Twitter card, JSON-LD type,
@@ -14,7 +15,7 @@ Cross-page: duplicate titles / descriptions, missing tags.
 Site-wide: broken internal + external links (checked once, deduped).
 
 Usage: seo-check.py <out_dir>
-Env: SEO_MAX_PAGES(300) CHECK_LINKS(1)
+Env: SEO_MAX_PAGES(300) CHECK_LINKS(1) SEO_RENDER_MAX(25) + netutil: AUDIT_UA DELAY QA_MAX_LINKS LINK_CACHE
 """
 
 import json
@@ -26,20 +27,22 @@ from collections import defaultdict
 from urllib.parse import urldefrag, urljoin, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA, per-host pacing and link checking (sibling module)
 import standards  # standards & best-practice knowledge base (sibling module)
 
-UA = "Mozilla/5.0 (compatible; SiteAudit/1.0)"
+UA = netutil.AUDIT_UA
 
 
 def fetch(url, timeout=20):
+    netutil.PACER.wait(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
 
 
-def status(url, timeout=15):
+def status(url, method="GET", timeout=15):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="GET")
+        req = urllib.request.Request(url, headers={"User-Agent": UA}, method=method)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status
     except urllib.error.HTTPError as e:
@@ -125,7 +128,6 @@ def analyze(url, html):
         if (attr(m.group(0), "rel") or "").lower() == "canonical":
             canon = attr(m.group(0), "href")
     robots = (meta(html, "robots") or "").lower()
-    h1 = len(re.findall(r"<h1\b", html, re.I))
     lang = (
         attr(re.search(r"<html\b[^>]*>", html, re.I).group(0), "lang")
         if re.search(r"<html\b[^>]*>", html, re.I)
@@ -137,6 +139,7 @@ def analyze(url, html):
     jsonld = re.findall(r'"@type"\s*:\s*"([^"]+)"', html)
     favicon = bool(re.search(r'<link[^>]+rel=["\'][^"\']*icon', html, re.I))
     text = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.I | re.S)
+    h1 = len(re.findall(r"<h1\b", text, re.I))  # scripts stripped: an "<h1>" string in JS isn't a heading
     words = len(re.sub(r"<[^>]+>", " ", text).split())
     imgs = re.findall(r"<img\b[^>]*>", html, re.I)
     no_alt = sum(1 for i in imgs if attr(i, "alt") is None)
@@ -158,6 +161,53 @@ def analyze(url, html):
         "imgs": len(imgs),
         "imgs_missing_alt": no_alt,
     }
+
+
+SHELL_ROOT = re.compile(r'<div[^>]+id=["\'](?:root|app|__next|__nuxt|svelte)["\'][^>]*>\s*</div>', re.I)
+MODULE_SCRIPT = re.compile(r'<script[^>]+type=["\']module["\']', re.I)
+
+
+def is_app_shell(html, a):
+    """Raw HTML that is only a client-side app's mount point: the body is built by JS."""
+    return a["h1_count"] == 0 and a["words"] < 50 and bool(SHELL_ROOT.search(html) or MODULE_SCRIPT.search(html))
+
+
+RENDER_JS = """() => ({
+  h1: document.querySelectorAll('h1').length,
+  words: (document.body ? document.body.innerText : '').split(/\\s+/).filter(Boolean).length,
+  imgs: document.querySelectorAll('img').length,
+  no_alt: [...document.querySelectorAll('img')].filter(i => !i.hasAttribute('alt')).length,
+})"""
+
+
+def render_body_signals(urls):
+    """Rendered-DOM body signals for SPA-shell pages: {url: {h1, words, imgs, no_alt} | {error}}."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        return {u: {"error": f"playwright unavailable: {e}"} for u in urls}
+    # Chromium mis-handles the TLS-intercepting egress proxy (see the other browser collectors);
+    # give only the browser a proxy-free environment so this script's own HTTP stays unchanged.
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("https_proxy", "http_proxy")}
+    res = {}
+    with sync_playwright() as p:
+        b = p.chromium.launch(
+            args=["--ignore-certificate-errors"],
+            executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None,
+            env=env,
+        )
+        for u in urls:
+            ctx = b.new_context(ignore_https_errors=True)
+            pg = ctx.new_page()
+            try:
+                netutil.PACER.wait(u)
+                pg.goto(u, wait_until="networkidle", timeout=45000)
+                res[u] = pg.evaluate(RENDER_JS)
+            except Exception as e:
+                res[u] = {"error": f"{type(e).__name__}: {str(e)[:80]}"}
+            ctx.close()
+        b.close()
+    return res
 
 
 def issues_for(p):
@@ -210,6 +260,10 @@ def main():
     cap = int(os.environ.get("SEO_MAX_PAGES", 300))
     urls = urls[:cap]
     dis = robots_disallows(out)
+    try:
+        soft404 = json.load(open(os.path.join(out, "crawl", "discovery.json"))).get("soft_404") or {}
+    except Exception:
+        soft404 = {}
     pages, all_links = {}, set()
     for u in urls:
         try:
@@ -223,8 +277,35 @@ def main():
                 lu, _ = urldefrag(urljoin(u, m))
                 if lu.startswith("http"):
                     all_links.add(lu)
+            a["content_source"] = "raw"
+            if is_app_shell(html, a):
+                a["content_source"] = "app-shell"  # replaced below once rendered
         except Exception as e:
             pages[u] = {"status": f"ERR:{type(e).__name__}", "issues": ["fetch failed"]}
+
+    # SPA shells: the raw HTML has no body yet, so "0 <h1>" / "thin content" would be false
+    # findings. Re-measure those signals from the rendered DOM (capped by SEO_RENDER_MAX).
+    shells = [u for u, p in pages.items() if p.get("content_source") == "app-shell"]
+    render_cap = int(os.environ.get("SEO_RENDER_MAX", 25))
+    for u, r in render_body_signals(shells[:render_cap]).items():
+        a = pages[u]
+        a["raw_body"] = {"h1_count": a["h1_count"], "words": a["words"]}
+        if "error" in r:
+            a["render_error"] = r["error"]
+            a["issues"].append(
+                f"note: raw HTML is an SPA shell and rendering failed ({r['error']}) — body checks unreliable"
+            )
+            continue
+        a.update(h1_count=r["h1"], words=r["words"], imgs=r["imgs"], imgs_missing_alt=r["no_alt"])
+        a["content_source"] = "rendered"
+        a["issues"], a["issue_codes"] = issues_for(a)
+        a["issues"].append(
+            "note: body content exists only after JavaScript runs (crawlers that don't render see an empty page)"
+        )
+    for u in shells[render_cap:]:
+        pages[u]["issues"].append(
+            "note: raw HTML is an SPA shell, not rendered (SEO_RENDER_MAX cap) — body checks unreliable"
+        )
 
     # cross-page duplicates
     titles, descs = defaultdict(list), defaultdict(list)
@@ -237,11 +318,11 @@ def main():
     dup_descs = {d[:50] + "...": us for d, us in descs.items() if len(us) > 1}
 
     # site-wide broken links (deduped, capped)
-    broken = {}
+    broken, links_not_checked = {}, []
     if os.environ.get("CHECK_LINKS", "1") == "1":
         BOT = ("medium.com", "facebook.com", "linkedin.com", "twitter.com", "x.com", "instagram.com", "youtube.com")
-        for lu in sorted(all_links)[:400]:
-            s = status(lu)
+        checked, links_not_checked = netutil.check_links(all_links, status)
+        for lu, s in checked.items():
             if isinstance(s, int) and s >= 400:
                 h = urlparse(lu).netloc.lower()
                 broken[lu] = {"status": s, "likely_bot_block": any(h.endswith(b) for b in BOT)}
@@ -253,6 +334,9 @@ def main():
         "duplicate_titles": dup_titles,
         "duplicate_descriptions": dup_descs,
         "broken_links": broken,
+        "soft_404": soft404,
+        "links_found": len(all_links),
+        "links_not_checked_cap": links_not_checked,
         "pages": pages,
     }
 
@@ -291,6 +375,8 @@ def main():
         fired.append("seo-broken-links")
     if mixed:
         fired.append("seo-mixed-content")
+    if soft404.get("soft_404"):
+        fired.append("seo-soft-404")
     if not_indexable:
         fired.append("seo-indexability")
     report["standards"] = standards.applied(fired)
@@ -298,6 +384,9 @@ def main():
 
     L = ["== SEO / METADATA / LINKS / INDEXABILITY =="]
     L.append(f"pages checked: {len(pages)}")
+    rendered = sum(1 for p in pages.values() if p.get("content_source") == "rendered")
+    if shells:
+        L.append(f"SPA shells (raw HTML has no body): {len(shells)}; body signals from rendered DOM: {rendered}")
     L.append(
         f"[Google indexability] NOT indexable: {len(not_indexable)}; "
         f"cross-canonical: {len(cross_canon)}; pages with mixed content: {len(mixed)}"
@@ -317,6 +406,16 @@ def main():
     L.append(f"duplicate titles: {len(dup_titles)}; duplicate descriptions: {len(dup_descs)}")
     real_broken = {u: d for u, d in broken.items() if not d["likely_bot_block"]}
     L.append(f"broken links: {len(real_broken)} (+{len(broken) - len(real_broken)} likely bot-blocked)")
+    if soft404.get("soft_404"):
+        L.append(
+            f"    [!] SOFT 404: unknown path answered {soft404.get('status')} — internal broken links on this "
+            "host CANNOT be detected (they return 200); 'broken links: 0' is not a pass here"
+        )
+    if links_not_checked:
+        L.append(
+            f"    [!] {len(links_not_checked)} of {len(all_links)} link(s) NOT checked (QA_MAX_LINKS cap) — "
+            "raise the cap to cover them"
+        )
     for u, d in list(real_broken.items())[:15]:
         L.append(f"    {d['status']}  {u}")
     L.append("")

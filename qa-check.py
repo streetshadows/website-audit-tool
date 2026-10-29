@@ -33,6 +33,9 @@ from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA, per-host pacing and link checking (sibling module)
+
 try:
     from PIL import Image, ImageStat
 
@@ -150,6 +153,13 @@ PROBE_JS = r"""
         minW: mn, maxW: mx});
     }
   });
+  // inside a horizontal scroller (overflow-x auto/scroll with real overflow) an item past the
+  // edge is the intended layout (carousel, tabs, table), not a bug: report the scroller once.
+  const scrollerOf = el => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      const ox = getComputedStyle(a).overflowX;
+      if ((ox === 'auto' || ox === 'scroll') && a.scrollWidth > a.clientWidth + 1) return a; }
+    return null; };
+  const hScrollers = new Set();
   // edge-clipped: box fits the viewport but is pushed partly off an edge
   const clipped = [];
   document.querySelectorAll('*').forEach(el => {
@@ -159,6 +169,7 @@ PROBE_JS = r"""
     const r = el.getBoundingClientRect();
     // box fits the viewport but is pushed partly off an edge (ignore far-offscreen = intentional)
     if (r.width <= vw && (r.right > vw + 2 || (r.left < -2 && r.left > -300))) {
+      const sc = scrollerOf(el); if (sc) { hScrollers.add(sc); return; }
       // innermost only: skip if a child is also clipped
       if (![...el.children].some(c => { const cr=c.getBoundingClientRect();
             return cr.width<=vw && (cr.right>vw+2 || cr.left<-2); }))
@@ -207,7 +218,10 @@ PROBE_JS = r"""
   const bg = getComputedStyle(document.body).backgroundColor || '';
   const m = bg.match(/\d+/g); let pageBright = 1;
   if (m && m.length >= 3) pageBright = (0.299*+m[0] + 0.587*+m[1] + 0.114*+m[2]) / 255;
-  return {vw, scrollW: document.documentElement.scrollWidth, uneven,
+  const h_scrollers = [...hScrollers].slice(0, 10).map(a => ({tag: a.tagName.toLowerCase(),
+    cls: (a.className||'').toString().slice(0,40), items: a.children.length,
+    scrollW: a.scrollWidth, clientW: a.clientWidth}));
+  return {vw, scrollW: document.documentElement.scrollWidth, uneven, h_scrollers,
     clipped: clipped.slice(0,20), imgs, small_targets: small_targets.slice(0,25),
     small_fonts: small_fonts.slice(0,25), navToggle, marquees: marquees.slice(0,5),
     pageBright: Math.round(pageBright*100)/100};
@@ -222,6 +236,7 @@ def analyze_images(rp, img_urls, page_dark):
     bleed, clash = {}, {}
     for u in sorted(img_urls):
         try:
+            netutil.PACER.wait(u)
             body = rp.request.get(u, timeout=15000).body()
             im = Image.open(io.BytesIO(body)).convert("RGB")
             w, h = im.size
@@ -299,7 +314,9 @@ def main():
         os.environ.pop(_v, None)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--ignore-certificate-errors"])
+        browser = p.chromium.launch(
+            args=["--ignore-certificate-errors"], executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None
+        )
         for name, w in WIDTHS.items():
             ctx = browser.new_context(
                 viewport={"width": w, "height": 900}, ignore_https_errors=True, reduced_motion="reduce"
@@ -315,6 +332,7 @@ def main():
                 "page_horizontal_scroll": data["scrollW"] > w + 2,
                 "crushed_or_uneven_grids": data["uneven"],
                 "edge_clipped_elements": data["clipped"],
+                "horizontal_scrollers": data["h_scrollers"],
                 "small_tap_targets": data["small_targets"] if name == "mobile" else "(mobile only)",
                 "small_fonts": data["small_fonts"] if name == "mobile" else "(mobile only)",
                 "nav_toggle": data["navToggle"] if name == "mobile" else "(mobile only)",
@@ -346,19 +364,26 @@ def main():
                         img_urls.add(urljoin(url, im["src"]))
             ctx.close()
 
-        api = browser.new_context(ignore_https_errors=True)
+        api = browser.new_context(ignore_https_errors=True, user_agent=netutil.AUDIT_UA)
         rp = api.new_page()
-        broken, bot_blocked = {}, {}
-        for u in sorted(link_urls | img_urls):
+
+        def link_status(u, method):
             try:
-                r = rp.request.get(u, timeout=15000)
-                if r.status >= 400:
-                    host = urlparse(u).netloc.lower()
-                    (bot_blocked if any(host.endswith(d) for d in BOT_BLOCK_DOMAINS) else broken)[u] = r.status
+                return rp.request.fetch(u, method=method, timeout=15000).status
             except Exception as e:
-                broken[u] = f"error: {str(e)[:60]}"
+                return f"error: {str(e)[:60]}"
+
+        broken, bot_blocked = {}, {}
+        checked, not_checked = netutil.check_links(link_urls | img_urls, link_status)
+        for u, st in checked.items():
+            if not isinstance(st, int):
+                broken[u] = st
+            elif st >= 400:
+                host = urlparse(u).netloc.lower()
+                (bot_blocked if any(host.endswith(d) for d in BOT_BLOCK_DOMAINS) else broken)[u] = st
         report["links"] = {
-            "checked": len(link_urls | img_urls),
+            "checked": len(checked),
+            "not_checked_cap": not_checked,
             "broken": broken,
             "likely_bot_blocked_verify_manually": bot_blocked,
         }
@@ -399,6 +424,11 @@ def main():
                 f"    !! CRUSHED/UNEVEN GRID <.{g['cls']}> cols='{g['cols']}' "
                 f"childWidths={g['childWidths']} (min {g['minW']}px vs max {g['maxW']}px)"
             )
+        for sc in v.get("horizontal_scrollers") or []:
+            L.append(
+                f"    (info) horizontal scroller <{sc['tag']} .{sc['cls']}> {sc['items']} items, "
+                f"{sc['scrollW']}px in {sc['clientW']}px — overflow inside it is intentional, not counted"
+            )
         for c in v["edge_clipped_elements"][:8]:
             L.append(
                 f"    edge-clipped <{c['tag']} .{c['cls']}> '{c['txt']}' "
@@ -436,6 +466,8 @@ def main():
         L.append(f"    {it['src']}\n        -> {', '.join(it['flags'])}")
     lk = report["links"]
     L.append(f"[links] checked {lk['checked']}, broken {len(lk['broken'])}")
+    if lk.get("not_checked_cap"):
+        L.append(f"[links] [!] {len(lk['not_checked_cap'])} link(s) NOT checked (QA_MAX_LINKS cap)")
     for u, s in lk["broken"].items():
         L.append(f"    BROKEN {s}  {u}")
     if lk["likely_bot_blocked_verify_manually"]:

@@ -13,6 +13,7 @@ status_table (§2 "show working"), sitemap (§3), techstack (§4), load, render_
 import base64
 import html as H
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -178,9 +179,19 @@ def load(audit_dir):
     }
 
 
-def document(title, subtitle, body):
+# Continuous-flow override: in a short report or an addendum, forcing every section onto a
+# fresh page (the default from CSS h2{page-break-before:always}) wastes pages — a one-page
+# addendum came out at 14. FLOW_CSS lets sections run on, keeping only the component
+# page-break-inside:avoid rules so tables/figures/callouts still don't split mid-box.
+FLOW_CSS = "h2{page-break-before:auto;margin-top:22px;}"
+
+
+def document(title, subtitle, body, flow=False):
+    """flow=True: continuous flow (no forced page break per section) — for short reports and
+    addenda. Default False keeps the one-section-per-page layout of the full report."""
+    extra = FLOW_CSS if flow else ""
     return (
-        f"<!doctype html><html><head><meta charset=utf-8><style>{CSS}</style></head><body>"
+        f"<!doctype html><html><head><meta charset=utf-8><style>{CSS}{extra}</style></head><body>"
         f"<div class='cover'><h1>{title}</h1><p class='sub'>{subtitle}</p></div>"
         f"{body}</body></html>"
     )
@@ -190,7 +201,7 @@ def render_pdf(html_doc, out_path):
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = p.chromium.launch(executable_path=os.environ.get("PW_CHROMIUM_EXECUTABLE") or None)
         pg = b.new_page()
         pg.set_content(html_doc, wait_until="load")
         pg.pdf(

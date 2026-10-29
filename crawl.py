@@ -16,19 +16,26 @@ Outputs: <out>/crawl/urls.txt, <out>/crawl/discovery.json, <out>/crawl/robots.tx
 
 Usage: crawl.py <base_url> <out_dir>
 Env: MAX_PAGES(150) MAX_DEPTH(4) DELAY(0.4) MODE(auto|sitemap|links) INCLUDE_SUBDOMAINS(0)
+     SEED_URLS — extra pages to include, comma/space separated, absolute or site-relative.
+                 Needed for SPAs, whose client-side routes never appear as links in raw HTML.
+urls.txt order: the target first, then SEED_URLS, then everything else sorted — later stages
+(and the MAX_PAGES cap) rely on that, so the requested pages are never displaced.
 """
 
 import gzip
 import json
 import os
 import re
+import secrets
 import sys
-import time
 import urllib.request
 from collections import deque
 from urllib.parse import urldefrag, urljoin, urlparse
 
-UA = "Mozilla/5.0 (compatible; SiteAudit/1.0; +audit)"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import netutil  # shared UA + per-host pacing (sibling module)
+
+UA = netutil.AUDIT_UA
 AI_BOTS = [
     "GPTBot",
     "ClaudeBot",
@@ -51,6 +58,7 @@ SKIP_EXT = re.compile(
 
 
 def get(url, timeout=20):
+    netutil.PACER.wait(url)  # every crawl request (robots, well-known, sitemaps, BFS) is paced
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = r.read()
@@ -60,6 +68,16 @@ def get(url, timeout=20):
             except Exception:
                 pass
         return r.status, data.decode("utf-8", "replace")
+
+
+def fetch_or_none(url, timeout=15):
+    """(status, body) without raising: HTTP errors give (code, ""), network errors (None, "")."""
+    try:
+        return get(url, timeout)
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except Exception:
+        return None, ""
 
 
 def status_only(url, timeout=15):
@@ -146,8 +164,8 @@ def collect_sitemap(url, seen, urls, cap, depth=0):
                 urls.add(n)
 
 
-def link_bfs(base, base_host, cap, max_depth, delay, include_sub):
-    seen, pages, q = set(), set(), deque([(base, 0)])
+def link_bfs(base, base_host, cap, max_depth, include_sub, seeds=()):
+    seen, pages, q = set(), set(), deque([(base, 0)] + [(s, 0) for s in seeds])
     while q and len(pages) < cap:
         url, d = q.popleft()
         if url in seen or d > max_depth:
@@ -170,7 +188,6 @@ def link_bfs(base, base_host, cap, max_depth, delay, include_sub):
                 continue
             if nu not in pages:
                 q.append((nu, d + 1))
-        time.sleep(delay)
     return pages
 
 
@@ -184,11 +201,24 @@ def main():
     base_host = urlparse(base).netloc
     cap = int(os.environ.get("MAX_PAGES", 150))
     max_depth = int(os.environ.get("MAX_DEPTH", 4))
-    delay = float(os.environ.get("DELAY", 0.4))
     mode = os.environ.get("MODE", "auto")
     include_sub = os.environ.get("INCLUDE_SUBDOMAINS", "0") == "1"
+    seeds, seeds_ignored = [], []
+    for raw in re.split(r"[,\s]+", os.environ.get("SEED_URLS", "").strip()):
+        n = norm(urljoin(base, raw)) if raw else None
+        if n and same_site(urlparse(n).netloc, base_host, include_sub):
+            if n != base and n not in seeds:
+                seeds.append(n)
+        elif raw:
+            seeds_ignored.append(raw)  # off-site or not http(s): reported, never crawled
 
-    disc = {"base": base, "host": base_host, "config": {"max_pages": cap, "max_depth": max_depth, "mode": mode}}
+    disc = {
+        "base": base,
+        "host": base_host,
+        "config": {"max_pages": cap, "max_depth": max_depth, "mode": mode, "delay_s": netutil.delay()},
+        "seed_urls": seeds,
+        "seed_urls_ignored": seeds_ignored,
+    }
 
     # robots.txt
     robots_url = f"{urlparse(base).scheme}://{base_host}/robots.txt"
@@ -222,8 +252,21 @@ def main():
         [v for k, v in groups.items() if k == "*" for rk, v in v if rk == "disallow"] if robots_present else []
     )
 
-    # well-known hygiene files
+    # soft-404 probe: a host that answers 200 for a path that cannot exist (typical of SPA
+    # hosting with an index.html fallback) makes every presence check and internal broken-link
+    # check on it meaningless, so detect it first and qualify those results.
     scheme = urlparse(base).scheme
+    probe_url = f"{scheme}://{base_host}/{secrets.token_hex(8)}-audit-404-probe"
+    probe_st, probe_body = fetch_or_none(probe_url)
+    soft404 = probe_st is not None and probe_st < 400
+    disc["soft_404"] = {"probe_url": probe_url, "status": probe_st, "soft_404": soft404}
+
+    def is_fallback(body):
+        """True when a 'present' well-known file is really the soft-404 fallback page."""
+        head = body.lstrip()[:300].lower()
+        return body.strip() == probe_body.strip() or ("<html" in head or "<!doctype html" in head)
+
+    # well-known hygiene files (on a soft-404 host, a 200 that is the HTML fallback is "soft-404")
     wk = {}
     for f in [
         "sitemap.xml",
@@ -235,11 +278,12 @@ def main():
         "humans.txt",
         "favicon.ico",
     ]:
-        wk[f] = status_only(f"{scheme}://{base_host}/{f}")
+        st, body = fetch_or_none(f"{scheme}://{base_host}/{f}")
+        wk[f] = "soft-404" if soft404 and st is not None and st < 400 and is_fallback(body) else st
     disc["well_known"] = wk
 
     # discover URLs
-    urls = set([base])
+    urls = set([base, *seeds])
     sm_candidates = list(
         dict.fromkeys(sitemaps + [f"{scheme}://{base_host}/sitemap.xml", f"{scheme}://{base_host}/sitemap_index.xml"])
     )
@@ -247,14 +291,16 @@ def main():
     if mode in ("auto", "sitemap"):
         seen = set()
         for sm in sm_candidates:
-            if status_only(sm) and status_only(sm) < 400:
+            st = status_only(sm)
+            if st and st < 400:
                 collect_sitemap(sm, seen, urls, cap)
-        if len(urls) > 1:
+        if len(urls) > 1 + len(seeds):  # seeds alone don't make the sitemap a success
             used = "sitemap"
     if used == "none" and mode in ("auto", "links"):
-        urls |= link_bfs(base, base_host, cap, max_depth, delay, include_sub)
+        urls |= link_bfs(base, base_host, cap, max_depth, include_sub, seeds)
         used = "link-crawl"
-    urls = sorted(u for u in urls if same_site(urlparse(u).netloc, base_host, include_sub))[:cap]
+    rest = sorted(u for u in urls - {base, *seeds} if same_site(urlparse(u).netloc, base_host, include_sub))
+    urls = [base, *seeds, *rest][:cap]
 
     disc["discovery_method"] = used
     disc["page_count"] = len(urls)
@@ -262,7 +308,11 @@ def main():
     open(os.path.join(out, "urls.txt"), "w").write("\n".join(urls) + "\n")
     json.dump(disc, open(os.path.join(out, "discovery.json"), "w"), indent=2)
 
-    print(f"discovery: method={used} pages={len(urls)} (cap {cap})")
+    print(f"discovery: method={used} pages={len(urls)} (cap {cap}); seeds={len(seeds)}")
+    if soft404:
+        print(f"SOFT 404: {probe_url} answered {probe_st} — unknown paths are not reported as missing")
+    if seeds_ignored:
+        print(f"SEED_URLS ignored (off-site or not http/https): {seeds_ignored}")
     print(
         f"robots.txt: {'present' if robots_present else 'MISSING'}; "
         f"sitemap.xml: {wk['sitemap.xml']}; llms.txt: {wk['llms.txt']}; security.txt: {wk['.well-known/security.txt']}"

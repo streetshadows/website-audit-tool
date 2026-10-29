@@ -91,6 +91,7 @@ contract. Your job is to drive the run, interpret the evidence, and build the re
 | `standards.py` | Citations KB — every finding maps to a standard + governance framework |
 | `PROCESS.md` | Full per-stage detail + scaling model |
 | `THIRD-PARTY-TOOLS.md` | Tool/service licences + terms of use + authorized-use disclaimer |
+| `BAAS-HARDENING.md` | Owner-side guide: the authenticated, server-side BaaS checks (RLS, auth config, CAPTCHA, edge functions) the external scan deliberately doesn't automate |
 
 ## Running on Claude Code on the web vs locally
 

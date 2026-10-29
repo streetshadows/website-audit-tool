@@ -227,6 +227,11 @@ the whole flow.
 Use [`REMEDIATION-PROMPT.template.md`](REMEDIATION-PROMPT.template.md) as the starting
 point for handing fixes to a site's own developer/AI.
 
+For a site on a Backend-as-a-Service stack (Supabase/PostgREST), the external scan is only
+half the picture: [`BAAS-HARDENING.md`](BAAS-HARDENING.md) is an owner-side checklist for the
+authenticated, server-side checks (RLS column-level authorization, auth config, server-side
+CAPTCHA enforcement, edge-function JWT) to run on your own project.
+
 ## Contributing & security
 Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev setup
 and the two hard rules (formatting can't drift; every finding shows its working and

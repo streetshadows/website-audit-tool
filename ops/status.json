@@ -3,11 +3,11 @@
   "app": "Website Audit Toolkit",
   "repo": "streetshadows/website-audit-tool",
   "description": "Public, canonical home of the website audit pipeline (security, TLS, SEO, accessibility, performance, responsive/visual) that Claude Code turns into a client-ready PDF report.",
-  "lastUpdated": "2026-10-28T23:59:00.000Z",
-  "session": "2026-10-28 - [implement] P2: passive anonymous over-fetch check (stage 4b, shape only), opt-in Supabase public auth-settings read, wildcard-CORS header note, report continuous-flow mode + chain/plan-limit authoring rules, run-to-run diff (stage 11). P0/P1/P2 complete.",
+  "lastUpdated": "2026-10-29T04:00:00.000Z",
+  "session": "2026-10-29 - [merge] field-feedback hardening (P0-P2) merged via PR #8; owner-side BaaS hardening guide merged via PR #9. Follow-up: README/CLAUDE.md now cross-link the guide.",
   "sprint": {
     "name": "Field-feedback hardening",
-    "focus": "P0, P1 and P2 complete on branch ccr-a71fd783-kyvi7z. Owner decisions outstanding: git-history cleanup; authenticated write/CAPTCHA/edge-function probes (recommended as an owner-side guide, not automated)."
+    "focus": "Field-feedback hardening landed (P0-P2 + owner-side BaaS guide). No feature work open."
   },
   "tasks": [],
   "completedTasks": [

@@ -5,6 +5,6 @@
 # aspell) are NOT pip packages — see README.md "Setup from scratch" and
 # THIRD-PARTY-TOOLS.md for the full list and their licences.
 
-playwright>=1.64.1
+playwright>=1.65.1
 shot-scraper>=1.12
 Pillow>=13.0.0
